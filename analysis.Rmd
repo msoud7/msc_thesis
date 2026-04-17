@@ -1,0 +1,196 @@
+---
+title: "Analysis"
+author: "Melle Stephen Oudshoorn"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r load packages}
+library(tidyverse)
+library(ggplot2)
+library(stringr)
+library(modelsummary)
+library(psych)
+```
+
+```{r setup the basics}
+df_panel <- read.csv("data/CSRD_thesis_data/panel_final.csv", check.names = FALSE) %>% 
+  filter(!is.na(esg_score))
+
+environmental_vars <- c(
+  #emissions
+  "scope_1_combined_reported_or_estimated_total",
+  "scope_2_combined_reported_or_estimated_total",
+  "scope_3_combined_reported_or_estimated_total",
+  "nox_emissions",
+  "sox_emissions",
+  "hazardous_waste",
+  #efficiency
+  "energy_use_total",
+  "renewable_energy_use_ratio",
+  #waste & pollution
+  "waste_recycled_to_total_waste",
+  "water_discharged",
+  #environmental footpring
+  "water_withdrawal_total",
+  "environmental_restoration_initiatives", #binary (TRUE/FALSE)
+  "research_development_expense"
+)
+
+social_vars <- c(
+  #workforce
+  "number_of_employees",
+  "women_employees",
+  "women_managers",
+  "training_hours_total",
+  "health_safety_policy", #binary (TRUE/FALSE)
+  #human rights
+  "human_rights_policy", #binary (TRUE/FALSE)
+  "csr_sustainability_external_audit", #binary (TRUE/FALSE)
+  #community
+  "donations_total"
+)
+
+governance_vars <- c(
+  #shareholders
+  "shareholders_score",
+  "shareholder_approval_significant_transactions", #binary (TRUE/FALSE)
+  #CSR strategy
+  "csr_sustainability_reporting", #binary (TRUE/FALSE)
+  "csr_sustainability_committee", #binary (TRUE/FALSE)
+  #management
+  "corruption_oversight", #binary (TRUE/FALSE)
+  "stakeholder_engagement" #binary (TRUE/FALSE)
+)
+
+all_vars <- c(environmental_vars, social_vars, governance_vars)
+```
+
+```{r build the disclosure score}
+construct_disclosure_scores <- function(df, environmental_vars, social_vars, governance_vars) {
+  
+  # Helper: score a single variable
+  score_var <- function(x) {
+    # Detect binary (logical or only TRUE/FALSE/NA values)
+    is_binary <- is.logical(x) || all(x %in% c(TRUE, FALSE, 1, 0, NA))
+    
+    if (is_binary) {
+      # Binary: TRUE/1 → 1, FALSE/0 → 0, NA → 0
+      return(as.integer(!is.na(x) & as.logical(x)))
+    } else {
+      # Numerical: reported (non-NA) → 1, NA → 0
+      return(as.integer(!is.na(x)))
+    }
+  }
+  
+  all_vars <- c(environmental_vars, social_vars, governance_vars)
+  
+  # Score each variable group
+  env_scores <- df[environmental_vars] %>% mutate(across(everything(), score_var))
+  soc_scores <- df[social_vars]        %>% mutate(across(everything(), score_var))
+  gov_scores <- df[governance_vars]    %>% mutate(across(everything(), score_var))
+  
+  df <- df %>%
+    mutate(
+      environmental_disclosure_score = rowSums(env_scores),
+      social_disclosure_score        = rowSums(soc_scores),
+      governance_disclosure_score    = rowSums(gov_scores),
+      esg_disclosure_score           = environmental_disclosure_score +
+                                       social_disclosure_score +
+                                       governance_disclosure_score,
+      
+      # Max possible scores per pillar
+      env_max = length(environmental_vars),
+      soc_max = length(social_vars),
+      gov_max = length(governance_vars),
+      esg_max = length(all_vars),
+      
+      # Normalised 0–1 scores
+      environmental_disclosure_score_norm = environmental_disclosure_score / env_max,
+      social_disclosure_score_norm        = social_disclosure_score        / soc_max,
+      governance_disclosure_score_norm    = governance_disclosure_score    / gov_max,
+      esg_disclosure_score_norm           = esg_disclosure_score           / esg_max
+    ) %>%
+    select(-env_max, -soc_max, -gov_max, -esg_max)  # drop helpers
+  
+  return(df)
+}
+
+df_panel <- construct_disclosure_scores(
+  df_panel,
+  environmental_vars,
+  social_vars,
+  governance_vars
+)
+```
+
+```{r describe the disclosure variables}
+psych::describe(df_panel %>%
+  select(
+    esg_disclosure_score,
+    environmental_disclosure_score,
+    social_disclosure_score,
+    governance_disclosure_score
+  ))
+```
+
+
+# Basic panel structure
+
+```{r}
+# number of firms, years, observations
+df_panel %>%
+  summarise(
+    n_obs = n(),
+    n_firms = n_distinct(`ISIN Code`),
+    n_years = n_distinct(year)
+  )
+
+# observations per year
+df_panel %>%
+  count(year) %>%
+  arrange(year)
+```
+
+We are covering 50,400 observations over 6,575 firms with 14 years being covered in the panel dataset.
+
+# Standard descriptive statistics
+
+```{r}
+
+```
+
+## Histograms for key variables
+
+```{r}
+df_esg_long <- df_panel %>%
+  select(
+    esg_score,
+    environmental_pillar_score,
+    esg_reporting_scope
+  ) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "variable",
+    values_to = "value"
+  )
+
+ggplot(df_esg_long, aes(x = value)) +
+  geom_histogram(bins = 50) +
+  facet_wrap(~ variable, scales = "free") +
+  labs(
+    title = "Distribution of ESG Variables",
+    x = NULL,
+    y = "Count"
+  ) +
+  theme_minimal()
+```
+
+
+# Missing values
+
+```{r}
+df_panel %>%
+  summarise(across(everything(), ~mean(is.na(.))))
+```
+
