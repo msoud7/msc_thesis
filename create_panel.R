@@ -82,7 +82,6 @@ panel_raw <- lapply(files, function(f) {
 
 panel_raw <- panel_raw %>%
   filter(
-    !is.na(`Company Name`),
     !is.na(fiscal_year)
   )
 
