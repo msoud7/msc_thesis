@@ -11,11 +11,72 @@ library(ggplot2)
 library(stringr)
 library(modelsummary)
 library(psych)
+library(fixest)
+
+eu_countries <- c(
+  "Austria", "Belgium", "Bulgaria", "Croatia", "Cyprus", "Czech Republic",
+  "Denmark", "Estonia", "Finland", "France", "Germany", "Greece", "Hungary",
+  "Ireland", "Italy", "Latvia", "Lithuania", "Luxembourg", "Malta", "Netherlands",
+  "Poland", "Portugal", "Romania", "Slovakia", "Slovenia", "Spain", "Sweden"
+)
+
+high_emission_sectors <- c( #division of high emissions sectors
+      "Oil, Gas & Consumable Fuels",
+      "Energy Equipment & Services",
+      "Metals & Mining", 
+      "Chemicals",
+      "Paper & Forest Products",
+      "Construction Materials",
+      "Electric Utilities",
+      "Gas Utilities",
+      "Water Utilities",
+      "Multi-Utilities",
+      "Independent Power and Renewable Electricity Producers"
+    )
 ```
 
 ```{r setup the basics}
 df_panel <- read.csv("data/CSRD_thesis_data/panel_final.csv", check.names = FALSE) %>% 
-  filter(!is.na(esg_score))
+  filter(!is.na(esg_score)) %>%  #filter out NA's for the ESG score
+  filter(`GICS Sector Name` != "Financials") %>% #filter out the financial sector due to unreliable emissions
+  filter(year >= 2014, year <= 2025) %>% #2026 and 2013 were in the original dataset but also too sparse
+  mutate(
+    leverage = total_debt_actual/market_capitalization, #create leverage variable
+    roa = net_income_after_tax / total_assets, #create roa variable
+    high_emission_sector = `GICS Industry Name` %in% high_emission_sectors, #defines high emission sectors
+    is_listed_eu = `Country of Exchange` %in% eu_countries, #defines whether a company is listed in the eu
+    #size standards
+    has_high_employees = ifelse(is.na(number_of_employees), FALSE, number_of_employees > 500), #whether a company exceeds NFRD size threshold regarding employees
+    has_high_assets = ifelse(is.na(total_assets), FALSE, total_assets > 20000000), #whether a company exceeds NFRD size threshold regarding assets
+    has_high_turnover = ifelse(is.na(turnover), FALSE, turnover > 40000000), #whether a company exceeds NFRD size threshold regarding turnover
+    nfrd_size = has_high_employees, #if they have larger than 500 employees they are exposed
+    #eu domicile
+    in_EU_EU_domicile = `Country of Incorporation` %in% eu_countries,
+    #NFRD/CSRD exposed
+    treatment_exposed = (has_high_employees | has_high_assets | has_high_turnover) & #adheres to size rules
+      (is_listed_eu | in_EU_EU_domicile),  #is in the EU
+    #policy shock
+    post_csrd = year >= 2024,
+    #emissions
+    total_emissions_log = log(scope_1_and_scope_2_and_scope_3_combined_reported_or_estimated_total + 1),
+    scope1_emissions_log = log(scope_1_combined_reported_or_estimated_total + 1),
+    scope2_emissions_log = log(scope_2_combined_reported_or_estimated_total + 1),
+    scope3_emissions_log = log(scope_3_combined_reported_or_estimated_total + 1),
+    #other pollutants
+    nox_log = log(nox_emissions + 1),
+    sox_log = log(sox_emissions + 1),
+    waste_log = log(hazardous_waste + 1),
+    #standardise emissions to match
+    total_emissions_std = as.numeric(scale(total_emissions_log)),
+    scope1_emissions_std = as.numeric(scale(scope1_emissions_log)),
+    scope2_emissions_std = as.numeric(scale(scope2_emissions_log)),
+    scope3_emissions_std = as.numeric(scale(scope3_emissions_log)),
+    nox_std = as.numeric(scale(nox_log)),
+    sox_std = as.numeric(scale(sox_log)),
+    waste_std = as.numeric(scale(waste_log)),
+    esg_std = as.numeric(scale(esg_score)),
+    env_pillar_std = as.numeric(scale(environmental_pillar_score))
+  )
 
 environmental_vars <- c(
   #emissions
@@ -34,7 +95,8 @@ environmental_vars <- c(
   #environmental footpring
   "water_withdrawal_total",
   "environmental_restoration_initiatives", #binary (TRUE/FALSE)
-  "research_development_expense"
+  "research_development_expense",
+  "biodiversity_due_diligence"
 )
 
 social_vars <- c(
@@ -44,9 +106,12 @@ social_vars <- c(
   "women_managers",
   "training_hours_total",
   "health_safety_policy", #binary (TRUE/FALSE)
+  "salary_gap",
+  "gender_pay_gap_percentage",
   #human rights
   "human_rights_policy", #binary (TRUE/FALSE)
   "csr_sustainability_external_audit", #binary (TRUE/FALSE)
+  "supply_chain_health_safety_improvements",
   #community
   "donations_total"
 )
@@ -55,12 +120,15 @@ governance_vars <- c(
   #shareholders
   "shareholders_score",
   "shareholder_approval_significant_transactions", #binary (TRUE/FALSE)
+  "independent_board_members",
   #CSR strategy
   "csr_sustainability_reporting", #binary (TRUE/FALSE)
   "csr_sustainability_committee", #binary (TRUE/FALSE)
   #management
   "corruption_oversight", #binary (TRUE/FALSE)
-  "stakeholder_engagement" #binary (TRUE/FALSE)
+  "stakeholder_engagement", #binary (TRUE/FALSE)
+  "audit_committee_independence",
+  "policy_executive_compensation_esg_performance"
 )
 
 all_vars <- c(environmental_vars, social_vars, governance_vars)
@@ -132,12 +200,77 @@ psych::describe(df_panel %>%
     social_disclosure_score,
     governance_disclosure_score
   ))
+
+df_esg_disclosure_long <- df_panel %>%
+  select(
+    esg_disclosure_score,
+    environmental_disclosure_score,
+    social_disclosure_score,
+    governance_disclosure_score
+  ) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "variable",
+    values_to = "value"
+  )
+
+ggplot(df_esg_disclosure_long, aes(x = value)) +
+  geom_histogram(bins = 50) +
+  facet_wrap(~ variable, scales = "free") +
+  labs(
+    title = "Distribution of ESG Variables",
+    x = NULL,
+    y = "Count"
+  ) +
+  theme_minimal()
 ```
 
+```{r computing the greenwashing index according to yu et al.}
+#standardise disclosure and performance scores within industry-year groups
+df_panel <- df_panel %>% 
+  group_by(`GICS Sector Name`, year) %>%  #ensures standardisation happens within each industry-year cluster
+  mutate(
+    #standardise the disclosure scores within industry-year groups
+    esg_disclosure_z = ((esg_disclosure_score - mean(esg_disclosure_score, na.rm = TRUE)) / sd(esg_disclosure_score, na.rm = TRUE)),
+    environmental_disclosure_z = ((environmental_disclosure_score - mean(environmental_disclosure_score, na.rm = TRUE)) / sd(environmental_disclosure_score, na.rm = TRUE)),
+    social_disclosure_z = ((social_disclosure_score - mean(social_disclosure_score, na.rm = TRUE)) / sd(social_disclosure_score, na.rm = TRUE)),
+    governance_disclosure_z = ((governance_disclosure_score - mean(governance_disclosure_score, na.rm = TRUE)) / sd(governance_disclosure_score, na.rm = TRUE)),
+    #standardise performance scores
+    esg_performance_z = (esg_score - mean(esg_score, na.rm = TRUE)) / sd(esg_score, na.rm = TRUE),
+    environmental_performance_z = (environmental_pillar_score - mean(environmental_pillar_score, na.rm = TRUE)) / sd(environmental_pillar_score, na.rm = TRUE),
+    social_performance_z = (social_pillar_score - mean(social_pillar_score, na.rm = TRUE)) / sd(social_pillar_score, na.rm = TRUE),
+    governance_performance_z = (governance_pillar_score - mean(governance_pillar_score, na.rm = TRUE)) / sd(governance_pillar_score, na.rm = TRUE),
+    #compute greenwashing index (standardised disclosure - standardised performance)
+    greenwashing_esg = esg_disclosure_z - esg_performance_z,
+    greenwashing_environmental = environmental_disclosure_z - environmental_performance_z,
+    greenwashing_social = social_disclosure_z - social_performance_z,
+    greenwashing_governance = governance_disclosure_z - governance_performance_z
+  ) %>% 
+  ungroup()
+```
 
-# Basic panel structure
+```{r computing the greenwashing index according to Dorfleitner & Utz}
+#esg vs total ghg
+gw_dorfleitner_utz_model <- feols(esg_std ~ total_emissions_std | `Identifier (RIC)` + year, data = df_panel)
+#E-pillar of esg vs total ghg
+gw_env_dorfleitner_utz_model <-  feols(environmental_pillar_score ~ total_emissions_std | `Identifier (RIC)` + year, data = df_panel)
 
-```{r}
+#compute the greenwashing as the residual
+df_panel$gw_dorfleitner_utz <- ifelse(is.na(df_panel$total_emissions_std), 
+                                     0, pmax(0, residuals(gw_dorfleitner_utz_model))) #either 0, or higher than 0 greenwashing
+df_panel$gw_env_dorfleitner_utz <- ifelse(is.na(df_panel$total_emissions_std), 
+                                         0, pmax(0, residuals(gw_env_dorfleitner_utz_model)))
+```
+
+# Standard descriptive statistics
+
+```{r colnames}
+colnames(df_panel)
+```
+
+# Sample structure
+
+```{r basic panel structure}
 # number of firms, years, observations
 df_panel %>%
   summarise(
@@ -152,39 +285,24 @@ df_panel %>%
   arrange(year)
 ```
 
-We are covering 50,400 observations over 6,575 firms with 14 years being covered in the panel dataset.
+```{r N observations by country, treatment status, and GICS sector}
+# observations per country
+df_panel %>%
+  count(`Country of Incorporation`) %>%
+  arrange(desc(n)) %>% 
+  head(20)
 
-# Standard descriptive statistics
+#observations per treatment status
+df_panel %>% 
+  count(treatment_exposed)
 
-```{r}
-
+#observations per GICS sector
+df_panel %>%
+  count(`GICS Sector Name`) %>%
+  arrange(desc(n)) %>% 
+  head(20)
 ```
 
-## Histograms for key variables
-
-```{r}
-df_esg_long <- df_panel %>%
-  select(
-    esg_score,
-    environmental_pillar_score,
-    esg_reporting_scope
-  ) %>%
-  pivot_longer(
-    cols = everything(),
-    names_to = "variable",
-    values_to = "value"
-  )
-
-ggplot(df_esg_long, aes(x = value)) +
-  geom_histogram(bins = 50) +
-  facet_wrap(~ variable, scales = "free") +
-  labs(
-    title = "Distribution of ESG Variables",
-    x = NULL,
-    y = "Count"
-  ) +
-  theme_minimal()
-```
 
 
 # Missing values
@@ -193,4 +311,20 @@ ggplot(df_esg_long, aes(x = value)) +
 df_panel %>%
   summarise(across(everything(), ~mean(is.na(.))))
 ```
+
+
+
+# Difference-in-differences
+
+```{r did computation}
+did_model <- feols(
+  greenwashing_esg ~ treatment_exposed * post_csrd |
+    `GICS Industry Name` + year,
+  data = df_panel,
+  cluster = ~`GICS Industry Name`
+)
+
+summary(did_model)
+```
+
 
