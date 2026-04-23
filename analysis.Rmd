@@ -715,17 +715,6 @@ df_panel %>%
   theme_minimal()
 ```
 
-
-
-# Missing values
-
-```{r}
-df_panel %>%
-  summarise(across(everything(), ~mean(is.na(.))))
-```
-
-
-
 # Difference-in-differences
 
 
