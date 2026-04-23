@@ -5,13 +5,32 @@ date: "`r Sys.Date()`"
 output: html_document
 ---
 
-```{r load packages}
+# Setup and work
+
+```{r setup chunk, echo = FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  message = FALSE, 
+  warning = FALSE,
+  fig.width = 10,
+  fig.height = 6
+)
+```
+
+
+```{r load packages and key lists}
 library(tidyverse)
 library(ggplot2)
 library(stringr)
 library(modelsummary)
 library(psych)
+library(patchwork)
 library(fixest)
+#pretty tables
+library(knitr)
+library(kableExtra)
+library(scales)
+library(car)
 
 eu_countries <- c(
   "Austria", "Belgium", "Bulgaria", "Croatia", "Cyprus", "Czech Republic",
@@ -39,7 +58,7 @@ high_emission_sectors <- c( #division of high emissions sectors
 df_panel <- read.csv("data/CSRD_thesis_data/panel_final.csv", check.names = FALSE) %>% 
   filter(!is.na(esg_score)) %>%  #filter out NA's for the ESG score
   filter(`GICS Sector Name` != "Financials") %>% #filter out the financial sector due to unreliable emissions
-  filter(year >= 2014, year <= 2025) %>% #2026 and 2013 were in the original dataset but also too sparse
+  filter(year >= 2014, year <= 2025) %>% #2026 and 2013 were in the original dataset but too sparse (around 100 observations each that align with the restrictives)
   mutate(
     leverage = total_debt_actual/market_capitalization, #create leverage variable
     roa = net_income_after_tax / total_assets, #create roa variable
@@ -52,6 +71,7 @@ df_panel <- read.csv("data/CSRD_thesis_data/panel_final.csv", check.names = FALS
     nfrd_size = has_high_employees, #if they have larger than 500 employees they are exposed
     #eu domicile
     in_EU_EU_domicile = `Country of Incorporation` %in% eu_countries,
+    UK_based = `Country of Incorporation` %in% "United Kingdom",
     #NFRD/CSRD exposed
     treatment_exposed = (has_high_employees | has_high_assets | has_high_turnover) & #adheres to size rules
       (is_listed_eu | in_EU_EU_domicile),  #is in the EU
@@ -165,21 +185,9 @@ construct_disclosure_scores <- function(df, environmental_vars, social_vars, gov
       governance_disclosure_score    = rowSums(gov_scores),
       esg_disclosure_score           = environmental_disclosure_score +
                                        social_disclosure_score +
-                                       governance_disclosure_score,
+                                       governance_disclosure_score
       
-      # Max possible scores per pillar
-      env_max = length(environmental_vars),
-      soc_max = length(social_vars),
-      gov_max = length(governance_vars),
-      esg_max = length(all_vars),
-      
-      # Normalised 0–1 scores
-      environmental_disclosure_score_norm = environmental_disclosure_score / env_max,
-      social_disclosure_score_norm        = social_disclosure_score        / soc_max,
-      governance_disclosure_score_norm    = governance_disclosure_score    / gov_max,
-      esg_disclosure_score_norm           = esg_disclosure_score           / esg_max
-    ) %>%
-    select(-env_max, -soc_max, -gov_max, -esg_max)  # drop helpers
+    )
   
   return(df)
 }
@@ -243,6 +251,7 @@ df_panel <- df_panel %>%
     #compute greenwashing index (standardised disclosure - standardised performance)
     greenwashing_esg = esg_disclosure_z - esg_performance_z,
     greenwashing_environmental = environmental_disclosure_z - environmental_performance_z,
+    greenwashing_environmental_alt = esg_disclosure_z - environmental_performance_z, #robustness check
     greenwashing_social = social_disclosure_z - social_performance_z,
     greenwashing_governance = governance_disclosure_z - governance_performance_z
   ) %>% 
@@ -264,43 +273,446 @@ df_panel$gw_env_dorfleitner_utz <- ifelse(is.na(df_panel$total_emissions_std),
 
 # Standard descriptive statistics
 
-```{r colnames}
-colnames(df_panel)
-```
-
-# Sample structure
+## Sample structure
 
 ```{r basic panel structure}
 # number of firms, years, observations
-df_panel %>%
-  summarise(
-    n_obs = n(),
-    n_firms = n_distinct(`ISIN Code`),
-    n_years = n_distinct(year)
-  )
+df_panel %>% 
+  summarise(N_obs = comma(n()), N_firms = comma(n_distinct(`ISIN Code`)), 
+            Years = n_distinct(year)) %>%
+  kable(booktabs = TRUE) %>%
+  kable_styling()
+
 
 # observations per year
-df_panel %>%
-  count(year) %>%
-  arrange(year)
+df_panel %>% 
+  count(year) %>% 
+  mutate(Share = percent(n/sum(n))) %>%
+  select(Year=year, Obs=n, Share) %>%
+  kable(booktabs=T) %>% kable_styling()
 ```
 
 ```{r N observations by country, treatment status, and GICS sector}
 # observations per country
-df_panel %>%
-  count(`Country of Incorporation`) %>%
-  arrange(desc(n)) %>% 
-  head(20)
+df_panel %>% 
+  count(`Country of Incorporation`, sort=T) %>% 
+  head(10) %>% 
+  mutate(Share = percent(n/sum(n))) %>%
+  select(Country=`Country of Incorporation`, Obs=n, Share) %>%
+  kable(booktabs=T) %>% kable_styling()
 
 #observations per treatment status
 df_panel %>% 
-  count(treatment_exposed)
+  count(treatment_exposed) %>% 
+  mutate(Group = ifelse(treatment_exposed, "Treated", "Control"),
+         Share = percent(n/sum(n))) %>%
+  select(Group, Obs=n, Share) %>%
+  kable(booktabs=T) %>% kable_styling()
 
 #observations per GICS sector
+df_panel %>% 
+  filter(`GICS Sector Name` != "Financials") %>%
+  count(`GICS Sector Name`, sort=T) %>% 
+  mutate(Share = percent(n/sum(n))) %>%
+  select(Sector=`GICS Sector Name`, Obs=n, Share) %>%
+  kable(booktabs=T) %>% kable_styling()
+
+#observations treated per year
+df_panel %>% 
+  count(year, treatment_exposed) %>% 
+  pivot_wider(names_from = treatment_exposed, values_from = n) %>%
+  mutate(Pct_Treated = scales::percent(`TRUE` / (`FALSE` + `TRUE`))) %>%
+  select(Year = year, Control = `FALSE`, Treated = `TRUE`, Pct_Treated) %>%
+  kable(digits = 0, booktabs = TRUE) %>% 
+  kable_styling()
+```
+
+```{r visualisations of sample}
+# 1. Stacked bar: Year × Treatment
+p1 <- df_panel %>%
+  count(year, treatment_exposed) %>%
+  mutate(group = ifelse(treatment_exposed, "Treated", "Control")) %>%
+  ggplot(aes(year, n, fill = group)) +
+  geom_col(position = "stack") +
+  geom_vline(xintercept = 2024, linetype = "dashed", color = "red") +
+  labs(title = "Panel Structure by Treatment", x = "Year", y = "Observations") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+# 2. EU vs Non-EU bar
+p2 <- df_panel %>%
+  mutate(eu = `Country of Incorporation` %in% eu_countries) %>%
+  count(eu) %>%
+  mutate(group = ifelse(eu, "EU", "Non-EU")) %>%
+  ggplot(aes(reorder(group, n), n, fill = group)) +
+  geom_col() +
+  labs(title = "EU vs Non-EU Firms", x = "", y = "Count") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# 3. Sector by treatment (dodge)
+p3 <- df_panel %>%
+  filter(`GICS Sector Name` != "Financials") %>%
+  count(`GICS Sector Name`, treatment_exposed) %>%
+  ggplot(aes(reorder(`GICS Sector Name`, n), n, fill = treatment_exposed)) +
+  geom_col(position = "dodge") +
+  coord_flip() +
+  labs(title = "Sectors by Treatment", x = "", y = "Count") +
+  theme_minimal()
+
+# Arrange 1 row
+p1 | p2 | p3
+```
+
+## Greenwashing index
+
+```{r list of greenwashing metrics}
+greenwashing_metrics <- c("greenwashing_esg", "greenwashing_environmental", "greenwashing_environmental_alt", "greenwashing_social", 
+                         "greenwashing_governance", "gw_dorfleitner_utz", "gw_env_dorfleitner_utz")
+```
+
+
+```{r summary stats}
 df_panel %>%
-  count(`GICS Sector Name`) %>%
-  arrange(desc(n)) %>% 
-  head(20)
+  select(all_of(greenwashing_metrics)) %>%
+  gather(key = "Measure", value = "GW") %>%
+  group_by(Measure) %>%
+  summarise(
+    Mean = round(mean(GW, na.rm=T), 3),
+    SD = round(sd(GW, na.rm=T), 3),
+    Median = round(median(GW, na.rm=T), 3),
+    P10 = round(quantile(GW, 0.1, na.rm=T), 3),
+    P90 = round(quantile(GW, 0.9, na.rm=T), 3),
+    .groups = "drop"
+  ) %>%
+  kable(booktabs=T) %>% kable_styling()
+```
+
+
+### Choosing which metric to use
+
+```{r correlation matrix of greenwashing metrics}
+df_panel %>%
+  select(all_of(greenwashing_metrics)) %>%
+  cor(use = "complete.obs") %>%
+  round(3) %>%
+  kable(booktabs=T, caption = "Greenwashing Measures Correlation", digits=3) %>%
+  kable_styling()
+```
+
+```{r kernal density plot of GW by treatment PRE/POST}
+df_panel %>%
+  mutate(period = ifelse(year < 2024, "Pre-CSRD", "Post-CSRD")) %>%
+  ggplot(aes(greenwashing_esg, fill = treatment_exposed, color = treatment_exposed)) +
+  geom_density(alpha = 0.5, size = 0.8) +
+  facet_wrap(~period, scales = "free_y") +
+  scale_fill_manual(values = c("FALSE" = "#2E86AB", "TRUE" = "#A23B72"), 
+                    labels = c("Control", "Treated")) +
+  scale_color_manual(values = c("FALSE" = "#2E86AB", "TRUE" = "#A23B72")) +
+  labs(title = "Greenwashing Distribution: Pre vs Post CSRD",
+       subtitle = "Shift in treated group distribution validates identification",
+       x = "Greenwashing ENVIRONMENTAL Score", fill = "Group", color = "Group") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+```{r kernal density plot of GW by treatment PRE/POST}
+df_panel %>%
+  mutate(period = ifelse(year < 2024, "Pre-CSRD", "Post-CSRD")) %>%
+  ggplot(aes(greenwashing_environmental, fill = treatment_exposed, color = treatment_exposed)) +
+  geom_density(alpha = 0.5, size = 0.8) +
+  facet_wrap(~period, scales = "free_y") +
+  scale_fill_manual(values = c("FALSE" = "#2E86AB", "TRUE" = "#A23B72"), 
+                    labels = c("Control", "Treated")) +
+  scale_color_manual(values = c("FALSE" = "#2E86AB", "TRUE" = "#A23B72")) +
+  labs(title = "Greenwashing Distribution: Pre vs Post CSRD",
+       subtitle = "Shift in treated group distribution validates identification",
+       x = "Greenwashing ENVIRONMENTAL Score", fill = "Group", color = "Group") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+```{r metrics correlation with fines}
+fines_corrs <- sapply(greenwashing_metrics, function(metric) {
+  cor(df_panel$greenwashing_fines_controversies_count, 
+      df_panel[[metric]], use = "complete.obs")
+})
+
+did_r2 <- numeric(length(greenwashing_metrics))
+for(i in seq_along(greenwashing_metrics)) {
+  metric <- greenwashing_metrics[i]
+  formula_str <- paste0("roa ~ treatment_exposed * post_csrd + ", metric, " | `Identifier (RIC)` + year")
+  model <- feols(as.formula(formula_str), data = df_panel, cluster = ~`Identifier (RIC)`)
+  did_r2[i] <- r2(model)
+}
+
+data.frame(
+  Measure = greenwashing_metrics,
+  Corr_Fines = round(fines_corrs, 3),
+  DiD_R2 = round(did_r2, 4)
+) %>%
+  arrange(desc(Corr_Fines)) %>%
+  kable(booktabs = TRUE, digits = 3, caption = "GW Measure Validation") %>%
+  kable_styling()
+```
+
+### Descriptives of the chosen metric
+
+```{r gw-environmental-descriptives, results='asis'}
+df_panel %>%
+  summarise(
+    `Mean` = round(mean(greenwashing_environmental, na.rm=T), 3),
+    `SD` = round(sd(greenwashing_environmental, na.rm=T), 3),
+    `P10` = round(quantile(greenwashing_environmental, 0.1, na.rm=T), 3),
+    `P50` = round(median(greenwashing_environmental, na.rm=T), 3),
+    `P90` = round(quantile(greenwashing_environmental, 0.9, na.rm=T), 3),
+    `N` = comma(sum(!is.na(greenwashing_environmental)))
+  ) %>%
+  kable(booktabs=T, caption="**Table 2: Primary Outcome - Environmental Greenwashing**") %>%
+  kable_styling()
+```
+
+## Pre-treatment Parallel trends
+
+```{r mean greenwashing by year and treatment}
+df_panel %>%
+  filter(year >= 2019) %>%
+  mutate(group = ifelse(treatment_exposed, "Treated", "Control")) %>%
+  group_by(year, group) %>%
+  summarise(mean_gw = round(mean(greenwashing_environmental, na.rm=T), 3), .groups="drop") %>%
+  pivot_wider(names_from = group, values_from = mean_gw) %>%
+  kable(booktabs=T, caption="Mean GW by Year × Treatment") %>%
+  kable_styling()
+```
+
+```{r formal pre-trend test}
+# 1. Pre-trend means table (your Table 3)
+df_panel %>%
+  filter(year < 2024) %>%
+  group_by(year, treatment_exposed) %>%
+  summarise(mean_gw = round(mean(greenwashing_environmental, na.rm=T), 3), .groups="drop") %>%
+  pivot_wider(names_from = treatment_exposed, values_from = mean_gw) %>%
+  kable(booktabs=T, caption="Pre-CSRD Parallel Trends") %>%
+  kable_styling()
+
+# 2. Report p-values INDIVIDUALLY (no joint test needed)
+pre_indiv <- feols(greenwashing_environmental ~ treatment_exposed * i(year, ref=2023) | `Identifier (RIC)` + year, 
+                   data = filter(df_panel, year < 2024), cluster = ~`Identifier (RIC)`)
+summary(pre_indiv)  # All pre-coeffs insignificant → parallel trends
+```
+
+```{r parallel trends test}
+print("Parallel trends SD (pre-2024):")
+df_panel %>%
+  filter(year < 2024) %>%
+  group_by(year, treatment_exposed) %>%
+  summarise(mean_gw = mean(greenwashing_environmental, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(names_from = treatment_exposed, values_from = mean_gw) %>%
+  mutate(diff = `TRUE` - `FALSE`) %>%
+  summarise(sd_diff = sd(diff, na.rm = TRUE), n_years = n()) %>%
+  mutate(t_stat = 0 / sd_diff * sqrt(n_years))
+```
+
+```{r parallel trends visualisation}
+df_panel %>%
+  filter(year >= 2018) %>%
+  group_by(year, treatment_exposed) %>%
+  summarise(mean_gw = median(greenwashing_environmental, na.rm=TRUE), .groups="drop") %>%
+  ggplot(aes(year, mean_gw, color=treatment_exposed)) +
+  geom_line() + geom_point() +
+  geom_vline(xintercept=2022, linetype="dashed") +
+  geom_vline(xintercept=2024, linetype="dashed") +
+  labs(x="Year", y="Average Greenwashing") +
+  theme_minimal()
+```
+
+# ESG Disclosure and performance scores
+
+```{r environmental scores by year and treatment}
+df_panel %>%
+  mutate(period = ifelse(year < 2024, "Pre-CSRD", "Post-CSRD")) %>%
+  group_by(period, treatment_exposed) %>%
+  summarise(
+    `Disclosure Z` = round(mean(esg_disclosure_z, na.rm=T), 3),
+    `Performance Z` = round(mean(esg_performance_z, na.rm=T), 3),
+    `Env Disclosure Z` = round(mean(environmental_disclosure_z, na.rm=T), 3),
+    `Env Perf Z` = round(mean(environmental_performance_z, na.rm=T), 3),
+    Greenwashing = round(mean(greenwashing_environmental, na.rm=T), 3),
+    .groups="drop"
+  ) %>%
+  kable(caption="**Table 2: Normalized Scores (Z-scores)**") %>%
+  kable_styling()
+```
+
+```{r disclosure vs performance z score}
+df_panel %>%
+  filter(year >= 2019) %>%
+  group_by(year, treatment_exposed) %>%
+  summarise(
+    disc_z = mean(environmental_disclosure_z, na.rm=T),
+    perf_z = mean(environmental_performance_z, na.rm=T),
+    .groups="drop"
+  ) %>%
+  ggplot(aes(year)) +
+  geom_line(aes(y=disc_z, color="Disclosure Z"), size=1) +
+  geom_line(aes(y=perf_z, color="Performance Z"), size=1) +
+  facet_wrap(~treatment_exposed) +
+  geom_vline(xintercept=2024, linetype="dashed", color="red") +
+  labs(y="Z-score", title="Disclosure Z > Performance Z → Gap Compression") +
+  theme_minimal()
+```
+
+```{r country distribution of ESG disclosure vs ESG performance scores}
+df_panel %>%
+  filter(year >= 2019) %>%
+  ggplot(aes(x = environmental_performance_z,
+             y = environmental_disclosure_z)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+  labs(
+    x = "Environmental Performance (Z-score)",
+    y = "Environmental Disclosure (Z-score)",
+    title = "Disclosure vs Performance (Z-scores)"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+df_panel %>%
+  filter(year <= 2023) %>%
+  group_by(`Country of Headquarters`) %>%
+  summarise(
+    disc_z = mean(environmental_disclosure_score, na.rm = TRUE),
+    perf_z = mean(environmental_pillar_score, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  ggplot(aes(x = disc_z, y = perf_z)) +
+  geom_point(alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+  labs(
+    x = "Environmental Disclosure",
+    y = "Environmental Performance",
+    title = "Country-Level Disclosure vs Performance (pre-2024)"
+  ) +
+  geom_text(aes(label = `Country of Headquarters`), hjust = 1, vjust = 1, size = 3) +
+  theme_minimal()
+```
+
+```{r boxplots of ESG performance and ESG disclosure score for sample firms}
+df_panel %>%
+  select(environmental_pillar_score, environmental_disclosure_score) %>%
+  pivot_longer(cols = everything(),
+               names_to = "metric",
+               values_to = "value") %>%
+  ggplot(aes(x = metric, y = value, fill = metric)) +
+  geom_boxplot(alpha = 0.7, outlier.alpha = 0.3) +
+  scale_x_discrete(labels = c(
+    environmental_pillar_score = "Environmental Performance",
+    environmental_disclosure_score = "Environmental Disclosure"
+  )) +
+  labs(
+    x = "",
+    y = "Score",
+    title = "Distribution of ESG Performance vs Disclosure (Full Sample)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+```{r distribution of relative greenwashing scores of sample firms}
+df_panel %>%
+  ggplot(aes(x = greenwashing_environmental)) +
+  geom_histogram(bins = 40, alpha = 0.7) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") +
+  labs(
+    x = "Relative Greenwashing Score (Environmental Disclosure Z score - Environmental Performance Z score)",
+    y = "Count",
+    title = "Distribution of Relative Greenwashing Scores (Full Sample)"
+  ) +
+  theme_minimal()
+```
+
+## Emissions analysis
+
+```{r emissions summary table}
+df_panel %>%
+  mutate(period = ifelse(year < 2024, "Pre-CSRD", "Post-CSRD")) %>%
+  group_by(period, treatment_exposed) %>%
+  summarise(
+    `Total Log` = round(mean(total_emissions_log, na.rm=T), 3),
+    `Scope1 Log` = round(mean(scope1_emissions_log, na.rm=T), 3),
+    `Scope2 Log` = round(mean(scope2_emissions_log, na.rm=T), 3),
+    `Scope3 Log` = round(mean(scope3_emissions_log, na.rm=T), 3),
+    .groups="drop"
+  ) %>%
+  kable(caption="**Table 4: Log Emissions Pre/Post CSRD**  
+  *H2 Expectation: Flat post-CSRD (no real effects)*") %>%
+  kable_styling()
+```
+
+```{r emissions time series}
+df_panel %>%
+  filter(year >= 2018) %>%
+  group_by(year, treatment_exposed) %>%
+  summarise(
+    scope1 = mean(scope1_emissions_log, na.rm=T),
+    scope2 = mean(scope2_emissions_log, na.rm=T),
+    total = mean(total_emissions_log, na.rm=T),
+    .groups="drop"
+  ) %>%
+  pivot_longer(c(scope1, scope2, total), names_to="scope", values_to="log_emissions") %>%
+  ggplot(aes(year, log_emissions, color=treatment_exposed)) +
+  geom_line() +
+  geom_vline(xintercept=2024, linetype="dashed") +
+  facet_wrap(~scope) +
+  labs(y="Log Emissions", title="Figure 4: Emissions Flat Post-CSRD 
+  Score compression, not real effects") +
+  theme_minimal()
+```
+
+```{r reporting method mix}
+df_panel %>%
+  mutate(reported_scope1 = case_when(
+    scope_1_combined_reported_or_estimated_method == "Reported_value" ~ "Reported",
+    TRUE ~ "Estimated/Modelled"
+  )) %>%
+  group_by(year, treatment_exposed, reported_scope1) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(year, treatment_exposed) %>%
+  mutate(share = n / sum(n)) %>%
+  ggplot(aes(year, share, fill = reported_scope1)) +
+  geom_col() +
+  facet_wrap(~treatment_exposed) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(y = "Share of Firms (%)", title = "Scope 1: Reported vs Modelled") +
+  theme_minimal()
+```
+
+## Industry Heterogeneity
+
+```{r industry heterogeneity summary}
+df_panel %>%
+  filter(treatment_exposed == TRUE) %>%
+  mutate(period = ifelse(year < 2024, "Pre-CSRD", "Post-CSRD")) %>%
+  group_by(`GICS Sector Name`, period) %>%
+  summarise(
+    mean_gw = mean(greenwashing_environmental, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(mean_gw))
+```
+
+```{r bar chart sector motivation}
+df_panel %>%
+  filter(treatment_exposed == TRUE) %>%
+  mutate(period = ifelse(year < 2024, "Pre-CSRD", "Post-CSRD")) %>%
+  group_by(`GICS Sector Name`, period) %>%
+  summarise(mean_gw = mean(greenwashing_environmental, na.rm = TRUE), .groups = "drop") %>%
+  ggplot(aes(x = `GICS Sector Name`, y = mean_gw, fill = period)) +
+  geom_col(position = "dodge") +
+  coord_flip() +
+  labs(x = "GICS Sector", y = "Mean Greenwashing Index", title = "Greenwashing by Sector: Treated Firms Only") +
+  theme_minimal()
 ```
 
 
@@ -316,15 +728,9 @@ df_panel %>%
 
 # Difference-in-differences
 
-```{r did computation}
-did_model <- feols(
-  greenwashing_esg ~ treatment_exposed * post_csrd |
-    `GICS Industry Name` + year,
-  data = df_panel,
-  cluster = ~`GICS Industry Name`
-)
 
-summary(did_model)
-```
+
+
+
 
 
