@@ -10,7 +10,6 @@ output: html_document
 ```{r setup chunk, echo = FALSE}
 knitr::opts_chunk$set(
   echo = FALSE,
-  message = FALSE, 
   warning = FALSE,
   fig.width = 10,
   fig.height = 6
@@ -234,9 +233,7 @@ ggplot(df_esg_disclosure_long, aes(x = value)) +
 ```
 
 ```{r computing the greenwashing index according to yu et al.}
-#standardise disclosure and performance scores within industry-year groups
 df_panel <- df_panel %>% 
-  group_by(`GICS Sector Name`, year) %>%  #ensures standardisation happens within each industry-year cluster
   mutate(
     #standardise the disclosure scores within industry-year groups
     esg_disclosure_z = ((esg_disclosure_score - mean(esg_disclosure_score, na.rm = TRUE)) / sd(esg_disclosure_score, na.rm = TRUE)),
@@ -472,6 +469,38 @@ df_panel %>%
   kable_styling()
 ```
 
+## Descriptive statistics and correlations
+
+```{r descriptive statistics of points of interest}
+descr_vars <- c("greenwashing_environmental", "total_assets", "net_income_after_tax", "turnover")
+
+desc_table <- map_dfr(descr_vars, function(v) {
+  x <- df_panel[[v]]
+  data.frame(
+    Variable = v,
+    n = sum(!is.na(x)),
+    mean = mean(x, na.rm = TRUE),
+    sd = sd(x, na.rm = TRUE),
+    min = min(x, na.rm = TRUE),
+    p25 = quantile(x, 0.25, na.rm = TRUE),
+    median = median(x, na.rm = TRUE),
+    p75 = quantile(x, 0.75, na.rm = TRUE),
+    max = max(x, na.rm = TRUE)
+  )
+})
+
+kable(desc_table, digits = 3, caption = "Descriptive statistics of selected variables")
+```
+
+```{r correlation matrix}
+cor_table <- df_panel %>%
+  select(all_of(descr_vars)) %>%
+  cor(use = "pairwise.complete.obs", method = "pearson")
+
+kable(round(cor_table, 3), caption = "Correlation matrix of selected variables")
+```
+
+
 ## Pre-treatment Parallel trends
 
 ```{r mean greenwashing by year and treatment}
@@ -500,6 +529,8 @@ pre_indiv <- feols(greenwashing_environmental ~ treatment_exposed * i(year, ref=
                    data = filter(df_panel, year < 2024), cluster = ~`Identifier (RIC)`)
 summary(pre_indiv)  # All pre-coeffs insignificant → parallel trends
 ```
+
+
 
 ```{r parallel trends test}
 print("Parallel trends SD (pre-2024):")
@@ -714,6 +745,28 @@ df_panel %>%
   labs(x = "GICS Sector", y = "Mean Greenwashing Index", title = "Greenwashing by Sector: Treated Firms Only") +
   theme_minimal()
 ```
+
+```{r table sector motivation}
+table_industry_gw <- df_panel %>%
+  group_by(`GICS Sector Name`) %>%
+  summarise(
+    n_firms = n_distinct(`Identifier (RIC)`),
+    greenwashing_score = mean(greenwashing_environmental, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    perc_of_all_firms = 100 * n_firms / sum(n_firms)
+  ) %>%
+  select(
+    Sector = `GICS Sector Name`,
+    perc_of_all_firms,
+    greenwashing_score
+  ) %>%
+  arrange(desc(perc_of_all_firms))
+
+kable(table_industry_gw, digits = 3, caption = "Sector share of firms and average greenwashing score")
+```
+
 
 # Difference-in-differences
 
