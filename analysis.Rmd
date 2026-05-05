@@ -1080,6 +1080,28 @@ summary(y_cluster_model)
 ```{r winsorization }
 #managing of extreme outliers, take the bottom and top 5% and set to the 5th percentile value, and 95th percentile respectively 
 
+#function to winsorise
+winsorize_5_95 <- function(x) {
+  p5 <- quantile(x, 0.05, na.rm = TRUE)
+  p95 <- quantile(x, 0.95, na.rm = TRUE)
+  pmax(pmin(x, p95), p5)
+}
+
+df_panel <- df_panel %>%
+  mutate(
+    !!paste0(y_var, "_wins") := winsorize_5_95(.data[[y_var]])
+  )
+
+robustness_model_wins <- feols(
+  as.formula(paste0(
+    paste0(y_var, "_wins"), " ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage | ",
+    "`Identifier (RIC)` + year"
+  )),
+  data = df_panel,
+  vcov = ~ `Identifier (RIC)`
+)
+
+summary(robustness_model_wins)
 ```
 
 
