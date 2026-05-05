@@ -10,6 +10,7 @@ output: html_document
 ```{r setup chunk, echo = FALSE}
 knitr::opts_chunk$set(
   echo = FALSE,
+  message = FALSE,
   warning = FALSE,
   fig.width = 10,
   fig.height = 6
@@ -58,6 +59,7 @@ df_panel <- read.csv("data/CSRD_thesis_data/panel_final.csv", check.names = FALS
   filter(!is.na(esg_score)) %>%  #filter out NA's for the ESG score
   filter(`GICS Sector Name` != "Financials") %>% #filter out the financial sector due to unreliable emissions
   filter(year >= 2014, year <= 2025) %>% #2026 and 2013 were in the original dataset but too sparse (around 100 observations each that align with the restrictives)
+  filter(!is.na(total_debt_actual)) %>% 
   mutate(
     leverage = total_debt_actual/market_capitalization, #create leverage variable
     roa = net_income_after_tax / total_assets, #create roa variable
@@ -72,15 +74,23 @@ df_panel <- read.csv("data/CSRD_thesis_data/panel_final.csv", check.names = FALS
     in_EU_EU_domicile = `Country of Incorporation` %in% eu_countries,
     UK_based = `Country of Incorporation` %in% "United Kingdom",
     #NFRD/CSRD exposed
-    treatment_exposed = (has_high_employees | has_high_assets | has_high_turnover) & #adheres to size rules
-      (is_listed_eu | in_EU_EU_domicile),  #is in the EU
+    treatment_exposed = has_high_employees & (has_high_assets | has_high_turnover) &
+  (is_listed_eu | in_EU_EU_domicile),  #is in the EU
     #policy shock
     post_csrd = year >= 2024,
+    post_announcement = year >= 2022,
     #emissions
     total_emissions_log = log(scope_1_and_scope_2_and_scope_3_combined_reported_or_estimated_total + 1),
     scope1_emissions_log = log(scope_1_combined_reported_or_estimated_total + 1),
     scope2_emissions_log = log(scope_2_combined_reported_or_estimated_total + 1),
     scope3_emissions_log = log(scope_3_combined_reported_or_estimated_total + 1),
+    inv_emissions = -total_emissions_log, #inverted so that higher = better performance
+    #scope1 reported or estimated
+    scope1_reported = if_else(scope_1_combined_reported_or_estimated_method == "Reported_value", 1L, 0L,
+      missing = NA_integer_),
+    scope1_estimated = if_else(scope_1_combined_reported_or_estimated_method %in% c(
+    "Aggregated_model","Winsorized_low","Extrapolated","Winsorized_high","Energy_extrapolated","Energy_model"),
+    1L, 0L, missing = NA_integer_),
     #other pollutants
     nox_log = log(nox_emissions + 1),
     sox_log = log(sox_emissions + 1),
@@ -94,60 +104,81 @@ df_panel <- read.csv("data/CSRD_thesis_data/panel_final.csv", check.names = FALS
     sox_std = as.numeric(scale(sox_log)),
     waste_std = as.numeric(scale(waste_log)),
     esg_std = as.numeric(scale(esg_score)),
-    env_pillar_std = as.numeric(scale(environmental_pillar_score))
+    env_pillar_std = as.numeric(scale(environmental_pillar_score)),
+    #group
+    group = case_when(
+      #treatment
+      treatment_exposed == TRUE ~ "Treatment",
+      #placebo
+      UK_based == TRUE ~ "Placebo",
+      #control (excl. UK)
+      treatment_exposed == FALSE & UK_based == FALSE ~ "Control", # and UK_based == FALSE
+      #fallback
+      TRUE ~ "Other"
+    )
   )
 
+df_panel <- df_panel %>%
+  group_by(`Identifier (RIC)`) %>%
+  mutate(
+    # Average % change in log emissions only for the pre-treatment years (2019-2021)
+    emissions_trajectory = mean(
+      ((total_emissions_log - lag(total_emissions_log)) / lag(total_emissions_log))[year %in% 2019:2021], 
+      na.rm = TRUE
+    )
+  ) %>%
+  # Fill NAs with 0 to prevent row-loss in regressions
+  mutate(emissions_trajectory = replace_na(emissions_trajectory, 0)) %>%
+  ungroup()
+
 environmental_vars <- c(
-  #emissions
   "scope_1_combined_reported_or_estimated_total",
   "scope_2_combined_reported_or_estimated_total",
   "scope_3_combined_reported_or_estimated_total",
   "nox_emissions",
   "sox_emissions",
   "hazardous_waste",
-  #efficiency
   "energy_use_total",
   "renewable_energy_use_ratio",
-  #waste & pollution
   "waste_recycled_to_total_waste",
   "water_discharged",
-  #environmental footpring
   "water_withdrawal_total",
-  "environmental_restoration_initiatives", #binary (TRUE/FALSE)
-  "research_development_expense",
-  "biodiversity_due_diligence"
+  "environmental_restoration_initiatives",
+  "biodiversity_due_diligence",
+  "policy_waste",
+  "water_management_plan_details",
+  "renewable_energy_use",
+  "policy_resource_efficiency",
+  "climate_policy_statement"
 )
 
 social_vars <- c(
-  #workforce
   "number_of_employees",
   "women_employees",
   "women_managers",
   "training_hours_total",
-  "health_safety_policy", #binary (TRUE/FALSE)
+  "health_safety_policy",
   "salary_gap",
   "gender_pay_gap_percentage",
-  #human rights
-  "human_rights_policy", #binary (TRUE/FALSE)
-  "csr_sustainability_external_audit", #binary (TRUE/FALSE)
+  "human_rights_policy",
+  "csr_sustainability_external_audit",
   "supply_chain_health_safety_improvements",
-  #community
-  "donations_total"
+  "donations_total",
+  "policy_board_diversity"
 )
 
 governance_vars <- c(
-  #shareholders
   "shareholders_score",
-  "shareholder_approval_significant_transactions", #binary (TRUE/FALSE)
+  "shareholder_approval_significant_transactions",
   "independent_board_members",
-  #CSR strategy
-  "csr_sustainability_reporting", #binary (TRUE/FALSE)
-  "csr_sustainability_committee", #binary (TRUE/FALSE)
-  #management
-  "corruption_oversight", #binary (TRUE/FALSE)
-  "stakeholder_engagement", #binary (TRUE/FALSE)
+  "csr_sustainability_reporting",
+  "csr_sustainability_committee",
+  "corruption_oversight",
+  "stakeholder_engagement",
   "audit_committee_independence",
-  "policy_executive_compensation_esg_performance"
+  "policy_executive_compensation_esg_performance",
+  "whistleblower_protection",
+  "policy_bribery_and_corruption"
 )
 
 all_vars <- c(environmental_vars, social_vars, governance_vars)
@@ -233,39 +264,57 @@ ggplot(df_esg_disclosure_long, aes(x = value)) +
 ```
 
 ```{r computing the greenwashing index according to yu et al.}
-df_panel <- df_panel %>% 
+df_panel <- df_panel %>%
+  group_by(year, `GICS Sector Code`) %>%  #group by year and sector to remove mechanical industry variation
   mutate(
     #standardise the disclosure scores within industry-year groups
-    esg_disclosure_z = ((esg_disclosure_score - mean(esg_disclosure_score, na.rm = TRUE)) / sd(esg_disclosure_score, na.rm = TRUE)),
-    environmental_disclosure_z = ((environmental_disclosure_score - mean(environmental_disclosure_score, na.rm = TRUE)) / sd(environmental_disclosure_score, na.rm = TRUE)),
-    social_disclosure_z = ((social_disclosure_score - mean(social_disclosure_score, na.rm = TRUE)) / sd(social_disclosure_score, na.rm = TRUE)),
-    governance_disclosure_z = ((governance_disclosure_score - mean(governance_disclosure_score, na.rm = TRUE)) / sd(governance_disclosure_score, na.rm = TRUE)),
+    esg_disclosure_z = as.numeric(scale(esg_disclosure_score)),
+    environmental_disclosure_z = as.numeric(scale(environmental_disclosure_score)),
+    social_disclosure_z = as.numeric(scale(social_disclosure_score)),
+    governance_disclosure_z = as.numeric(scale(governance_disclosure_score)),
     #standardise performance scores
-    esg_performance_z = (esg_score - mean(esg_score, na.rm = TRUE)) / sd(esg_score, na.rm = TRUE),
-    environmental_performance_z = (environmental_pillar_score - mean(environmental_pillar_score, na.rm = TRUE)) / sd(environmental_pillar_score, na.rm = TRUE),
-    social_performance_z = (social_pillar_score - mean(social_pillar_score, na.rm = TRUE)) / sd(social_pillar_score, na.rm = TRUE),
-    governance_performance_z = (governance_pillar_score - mean(governance_pillar_score, na.rm = TRUE)) / sd(governance_pillar_score, na.rm = TRUE),
-    #compute greenwashing index (standardised disclosure - standardised performance)
+    esg_performance_z = as.numeric(scale(esg_score)),
+    environmental_performance_z = as.numeric(scale(environmental_pillar_score)),
+    social_performance_z = as.numeric(scale(social_pillar_score)),
+    governance_performance_z = as.numeric(scale(governance_pillar_score)),
+    
+    #compute greenwashing indeces (standardised disclosure - standardised performance)
+    
+    #baseline greenwashing index
     greenwashing_esg = esg_disclosure_z - esg_performance_z,
+    
+    #pillared greenwashing index
     greenwashing_environmental = environmental_disclosure_z - environmental_performance_z,
-    greenwashing_environmental_alt = esg_disclosure_z - environmental_performance_z, #robustness check
     greenwashing_social = social_disclosure_z - social_performance_z,
-    greenwashing_governance = governance_disclosure_z - governance_performance_z
+    greenwashing_governance = governance_disclosure_z - governance_performance_z,
+    
+    #robustness check
+    greenwashing_environmental_alt = esg_disclosure_z - environmental_performance_z #robustness check
   ) %>% 
   ungroup()
 ```
 
 ```{r computing the greenwashing index according to Dorfleitner & Utz}
 #esg vs total ghg
-gw_dorfleitner_utz_model <- feols(esg_std ~ total_emissions_std | `Identifier (RIC)` + year, data = df_panel)
+gw_model <- feols(esg_std ~ total_emissions_std | `Identifier (RIC)` + year,
+                  cluster = ~`Identifier (RIC)` + year,
+                  data = df_panel)
 #E-pillar of esg vs total ghg
-gw_env_dorfleitner_utz_model <-  feols(environmental_pillar_score ~ total_emissions_std | `Identifier (RIC)` + year, data = df_panel)
+gw_env_model <-  feols(environmental_pillar_score ~ total_emissions_std | `Identifier (RIC)` + year,
+                       cluster = ~`Identifier (RIC)` + year,
+                       data = df_panel)
+
+#extracting the residuals safely
 
 #compute the greenwashing as the residual
-df_panel$gw_dorfleitner_utz <- ifelse(is.na(df_panel$total_emissions_std), 
-                                     0, pmax(0, residuals(gw_dorfleitner_utz_model))) #either 0, or higher than 0 greenwashing
-df_panel$gw_env_dorfleitner_utz <- ifelse(is.na(df_panel$total_emissions_std), 
-                                         0, pmax(0, residuals(gw_env_dorfleitner_utz_model)))
+df_panel <- df_panel %>%
+  mutate(
+    # ESG-based residual GW
+    gw_dorfleitner_utz = esg_std - predict(gw_model, newdata = .),
+    
+    # Environment-only residual GW
+    gw_env_dorfleitner_utz = env_pillar_std - predict(gw_env_model, newdata = .)
+  )
 ```
 
 # Standard descriptive statistics
@@ -322,6 +371,21 @@ df_panel %>%
   select(Year = year, Control = `FALSE`, Treated = `TRUE`, Pct_Treated) %>%
   kable(digits = 0, booktabs = TRUE) %>% 
   kable_styling()
+
+#observation oversight table
+#columns: group based on a condition that differs for each group, firm-years, unique firms, countries, treatment year
+observation_table <- df_panel %>%
+  group_by(group) %>%
+  summarise(
+    `Firm-Years` = n(),
+    `Unique Firms` = n_distinct(`Company Name`), 
+    `Countries` = n_distinct(`Country of Incorporation`),      
+    `Treatment Year` = if_else(first(group) == "Treatment", "2022", "N/A"),
+    .groups = "drop"
+  ) %>%
+  arrange(factor(group, levels = c("Treatment", "Control", "Placebo")))
+
+print(observation_table)
 ```
 
 ```{r visualisations of sample}
@@ -398,33 +462,29 @@ df_panel %>%
 ```
 
 ```{r kernal density plot of GW by treatment PRE/POST}
-df_panel %>%
-  mutate(period = ifelse(year < 2024, "Pre-CSRD", "Post-CSRD")) %>%
-  ggplot(aes(greenwashing_esg, fill = treatment_exposed, color = treatment_exposed)) +
-  geom_density(alpha = 0.5, size = 0.8) +
-  facet_wrap(~period, scales = "free_y") +
-  scale_fill_manual(values = c("FALSE" = "#2E86AB", "TRUE" = "#A23B72"), 
-                    labels = c("Control", "Treated")) +
-  scale_color_manual(values = c("FALSE" = "#2E86AB", "TRUE" = "#A23B72")) +
-  labs(title = "Greenwashing Distribution: Pre vs Post CSRD",
-       subtitle = "Shift in treated group distribution validates identification",
-       x = "Greenwashing ENVIRONMENTAL Score", fill = "Group", color = "Group") +
-  theme_minimal() +
-  theme(legend.position = "bottom")
-```
+df_density <- df_panel %>%
+  filter(year >= 2019) %>%
+  mutate(
+    period = if_else(year <= 2021, "Pre-treatment (2019–2021)", "Post-treatment (2022–2025)"),
+    group = if_else(treatment_exposed == 1, "Treated Group", "Control Group")
+  )
 
-```{r kernal density plot of GW by treatment PRE/POST}
-df_panel %>%
-  mutate(period = ifelse(year < 2024, "Pre-CSRD", "Post-CSRD")) %>%
-  ggplot(aes(greenwashing_environmental, fill = treatment_exposed, color = treatment_exposed)) +
-  geom_density(alpha = 0.5, size = 0.8) +
-  facet_wrap(~period, scales = "free_y") +
-  scale_fill_manual(values = c("FALSE" = "#2E86AB", "TRUE" = "#A23B72"), 
-                    labels = c("Control", "Treated")) +
-  scale_color_manual(values = c("FALSE" = "#2E86AB", "TRUE" = "#A23B72")) +
-  labs(title = "Greenwashing Distribution: Pre vs Post CSRD",
-       subtitle = "Shift in treated group distribution validates identification",
-       x = "Greenwashing ENVIRONMENTAL Score", fill = "Group", color = "Group") +
+ggplot(df_density, aes(x = greenwashing_environmental, fill = period, color = period)) +
+  geom_density(alpha = 0.25, linewidth = 1, adjust = 1) +
+  facet_wrap(~ group) +
+  geom_vline(xintercept = 0, linetype = "dotted", color = "grey50") +
+  labs(
+    title = "Kernel density of Greenwashing Index before and after CSRD",
+    x = "Greenwashing Index",
+    y = "Density",
+    fill = NULL,
+    color = NULL
+  ) +
+  scale_fill_manual(values = c("Pre-treatment (2019–2021)" = "#1f77b4",
+                               "Post-treatment (2022–2025)" = "#d62728")) +
+  scale_color_manual(values = c("Pre-treatment (2019–2021)" = "#1f77b4",
+                                "Post-treatment (2022–2025)" = "#d62728")) +
+  geom_vline(xintercept = 0, linetype = "dotted", color = "black") +
   theme_minimal() +
   theme(legend.position = "bottom")
 ```
@@ -456,86 +516,126 @@ data.frame(
 ### Descriptives of the chosen metric
 
 ```{r gw-environmental-descriptives, results='asis'}
+y_var <- "greenwashing_esg"
+
 df_panel %>%
   summarise(
-    `Mean` = round(mean(greenwashing_environmental, na.rm=T), 3),
-    `SD` = round(sd(greenwashing_environmental, na.rm=T), 3),
-    `P10` = round(quantile(greenwashing_environmental, 0.1, na.rm=T), 3),
-    `P50` = round(median(greenwashing_environmental, na.rm=T), 3),
-    `P90` = round(quantile(greenwashing_environmental, 0.9, na.rm=T), 3),
-    `N` = comma(sum(!is.na(greenwashing_environmental)))
+    `Mean` = round(mean(.data[[y_var]], na.rm = TRUE), 3),
+    `SD` = round(sd(.data[[y_var]], na.rm = TRUE), 3),
+    `P10` = round(quantile(.data[[y_var]], 0.1, na.rm = TRUE), 3),
+    `P50` = round(median(.data[[y_var]], na.rm = TRUE), 3),
+    `P90` = round(quantile(.data[[y_var]], 0.9, na.rm = TRUE), 3),
+    `N` = comma(sum(!is.na(.data[[y_var]])))
   ) %>%
-  kable(booktabs=T, caption="**Table 2: Primary Outcome - Environmental Greenwashing**") %>%
+  kable(booktabs = TRUE, caption = "**Table 2: Primary Outcome - Environmental Greenwashing**") %>%
   kable_styling()
 ```
 
 ## Descriptive statistics and correlations
 
 ```{r descriptive statistics of points of interest}
-descr_vars <- c("greenwashing_environmental", "total_assets", "net_income_after_tax", "turnover")
+#define variables and formal names for the table
+descr_vars <- c(
+  "greenwashing_esg" = "Greenwashing Index",
+  "greenwashing_environmental" = "Greenwashing Index (Env)",
+  "total_assets"               = "Total Assets (EUR)",
+  "roa" = "Return on Assets (net income / total assets)",
+  "leverage" = "Financial Leverage (Total debt / Total assets)",
+  "emissions_trajectory" = "Pre-treatment carbon trend (2019-2021)"
+)
 
-desc_table <- map_dfr(descr_vars, function(v) {
+#build the table
+desc_table <- map_dfr(names(descr_vars), function(v) {
   x <- df_panel[[v]]
+  
+  # Scale assets to Billions only for display
+  if(v == "total_assets") x <- x / 1e9
+  
   data.frame(
-    Variable = v,
-    n = sum(!is.na(x)),
-    mean = mean(x, na.rm = TRUE),
-    sd = sd(x, na.rm = TRUE),
-    min = min(x, na.rm = TRUE),
-    p25 = quantile(x, 0.25, na.rm = TRUE),
-    median = median(x, na.rm = TRUE),
-    p75 = quantile(x, 0.75, na.rm = TRUE),
-    max = max(x, na.rm = TRUE)
+    Variable = descr_vars[v],
+    N        = sum(!is.na(x)),
+    Mean     = mean(x, na.rm = TRUE),
+    St.Dev.  = sd(x, na.rm = TRUE),
+    Min      = min(x, na.rm = TRUE),
+    P25      = quantile(x, 0.25, na.rm = TRUE),
+    Median   = median(x, na.rm = TRUE),
+    P75      = quantile(x, 0.75, na.rm = TRUE),
+    Max      = max(x, na.rm = TRUE)
   )
 })
 
-kable(desc_table, digits = 3, caption = "Descriptive statistics of selected variables")
+#render the table
+desc_table %>%
+  kable(format = "html", digits = 3, caption = "Table X: Descriptive Statistics", 
+        format.args = list(big.mark = ","),
+        col.names = c("Variable", "N", "Mean", "St. Dev.", "Min", "P25", "Median", "P75", "Max")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = F) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#444444")
 ```
-
-```{r correlation matrix}
-cor_table <- df_panel %>%
-  select(all_of(descr_vars)) %>%
-  cor(use = "pairwise.complete.obs", method = "pearson")
-
-kable(round(cor_table, 3), caption = "Correlation matrix of selected variables")
-```
-
 
 ## Pre-treatment Parallel trends
 
-```{r mean greenwashing by year and treatment}
-df_panel %>%
-  filter(year >= 2019) %>%
-  mutate(group = ifelse(treatment_exposed, "Treated", "Control")) %>%
-  group_by(year, group) %>%
-  summarise(mean_gw = round(mean(greenwashing_environmental, na.rm=T), 3), .groups="drop") %>%
-  pivot_wider(names_from = group, values_from = mean_gw) %>%
-  kable(booktabs=T, caption="Mean GW by Year × Treatment") %>%
-  kable_styling()
+```{r balance test}
+#filter for pre-treatment years
+df_pre <- df_panel %>%
+  filter(year >= 2019 & year <= 2021) %>%
+  filter(group %in% c("Treatment", "Control"))
+
+table_3_data <- map_dfr(names(descr_vars), function(v) {
+  
+  # Conduct t-test: variable ~ group
+  t_res <- t.test(df_pre[[v]] ~ df_pre$group)
+  
+  # Extract means (Note: R orders groups alphabetically, so check order)
+  # Usually: [1] is Control, [2] is Treatment if alphabetically sorted
+  means <- t_res$estimate
+  p_val <- t_res$p.value
+  
+  data.frame(
+    Variable = descr_vars[v],
+    `Treatment Mean` = means[2], # Adjust index based on your group names
+    `Control Mean` = means[1],
+    `Diff (T-C)` = means[2] - means[1],
+    `p-value` = p_val
+  )
+})
+
+table_3_data %>%
+  kable(
+    format = "html",
+    digits = 3,
+    caption = "Table 3: Pre-Treatment Balance Test (2019–2021 Means)",
+    col.names = c("Variable", "Treatment Mean", "Control Mean", "Diff. (T-C)", "p-value")
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = F) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#444444") %>%
+  # Add a footnote to explain the p-values
+  footnote(general = "p-values are from two-sample t-tests comparing Treatment and Control groups during the 2019–2021 period.")
 ```
 
-```{r formal pre-trend test}
-# 1. Pre-trend means table (your Table 3)
-df_panel %>%
-  filter(year < 2024) %>%
-  group_by(year, treatment_exposed) %>%
-  summarise(mean_gw = round(mean(greenwashing_environmental, na.rm=T), 3), .groups="drop") %>%
-  pivot_wider(names_from = treatment_exposed, values_from = mean_gw) %>%
-  kable(booktabs=T, caption="Pre-CSRD Parallel Trends") %>%
-  kable_styling()
 
-# 2. Report p-values INDIVIDUALLY (no joint test needed)
-pre_indiv <- feols(greenwashing_environmental ~ treatment_exposed * i(year, ref=2023) | `Identifier (RIC)` + year, 
-                   data = filter(df_panel, year < 2024), cluster = ~`Identifier (RIC)`)
-summary(pre_indiv)  # All pre-coeffs insignificant → parallel trends
+```{r}
+df_event <- df_panel %>% 
+  filter(group %in% c("Treatment", "Control"))
+
+event_study <- feols(greenwashing_esg ~ i(year, treatment_exposed, ref = 2021) + 
+                     log(total_assets) + leverage + roa | `Identifier (RIC)` + year, 
+                     cluster = ~`Identifier (RIC)`, 
+                     data = df_event)
+
+# Plot the results
+iplot(event_study, 
+      main = "Event Study: Impact of CSRD on Greenwashing",
+      xlab = "Year", 
+      ylab = "Estimated Effect (Coefficient)")
 ```
 
 
 
 ```{r parallel trends test}
-print("Parallel trends SD (pre-2024):")
+print("Parallel trends SD (pre-2022):")
 df_panel %>%
-  filter(year < 2024) %>%
+  filter(year < 2022) %>%
   group_by(year, treatment_exposed) %>%
   summarise(mean_gw = mean(greenwashing_environmental, na.rm = TRUE), .groups = "drop") %>%
   pivot_wider(names_from = treatment_exposed, values_from = mean_gw) %>%
@@ -546,14 +646,16 @@ df_panel %>%
 
 ```{r parallel trends visualisation}
 df_panel %>%
-  filter(year >= 2018) %>%
+  filter(year >= 2019) %>%
   group_by(year, treatment_exposed) %>%
   summarise(mean_gw = median(greenwashing_environmental, na.rm=TRUE), .groups="drop") %>%
   ggplot(aes(year, mean_gw, color=treatment_exposed)) +
   geom_line() + geom_point() +
   geom_vline(xintercept=2022, linetype="dashed") +
   geom_vline(xintercept=2024, linetype="dashed") +
-  labs(x="Year", y="Average Greenwashing") +
+  annotate("text", x = 2022, y = Inf, label = "CSRD announcement", angle = 90, vjust = 1.2, hjust = 1) +
+  annotate("text", x = 2024, y = Inf, label = "CSRD goes in effect", angle = 90, vjust = 1.2, hjust = 1) +
+  labs(title = "Average Greenwashing temporal trend (2019-2025)", x="Year", y="Average Greenwashing") +
   theme_minimal()
 ```
 
@@ -770,9 +872,141 @@ kable(table_industry_gw, digits = 3, caption = "Sector share of firms and averag
 
 # Difference-in-differences
 
+## H1 Main effect
 
+```{r base model}
+base_model <- feols(
+  as.formula(paste0(
+    y_var, " ~ treatment_exposed * post_announcement" #base, only the announcement and treatment exposure
+  )),
+  data = df_panel,
+  vcov = ~ `Identifier (RIC)`
+)
 
+summary(base_model)
+```
 
+```{r base plus controls}
+controls_model <- feols(
+  as.formula(paste0(
+    y_var, " ~ treatment_exposed * post_announcement", #base
+    "+ log(total_assets) + roa + leverage" #include the controls
+  )),
+  data = df_panel,
+  vcov = ~ `Identifier (RIC)`
+)
 
+summary(controls_model)
+```
+
+```{r base plus controlled plus fixed effects}
+fe_model <- feols(
+  as.formula(paste0(
+    y_var, " ~ treatment_exposed * post_announcement", #base
+    "+ log(total_assets) + roa + leverage | ", #controls
+    "`Identifier (RIC)` + year" #fixed effects for firm and year
+  )),
+  data = df_panel,
+  vcov = ~ `Identifier (RIC)`
+)
+
+summary(fe_model)
+```
+
+## H2 Mechanism test
+
+```{r reported model}
+reported_model <- feols(
+  scope1_emissions_log ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage |
+    `Identifier (RIC)` + year,
+  data = df_panel %>% filter(scope1_reported == 1, scope1_emissions_log > 0),
+  vcov = ~ `Identifier (RIC)`
+)
+
+summary(reported_model)
+```
+
+```{r modelled }
+estimated_model <- feols(
+  scope1_emissions_log ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage |
+    `Identifier (RIC)` + year,
+  data = df_panel %>% filter(scope1_estimated == 1, scope1_emissions_log > 0),
+  vcov = ~ `Identifier (RIC)`
+)
+
+summary(estimated_model)
+```
+
+## Industry Heterogeneity
+
+```{r split sample models}
+high_model <- feols(
+  as.formula(paste0(
+    y_var, " ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage | ",
+    "`Identifier (RIC)` + year"
+  )),
+  data = df_panel %>% filter(high_emission_sector == 1),
+  vcov = ~ `Identifier (RIC)`
+)
+
+low_model <- feols(
+  as.formula(paste0(
+    y_var, " ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage | ",
+    "`Identifier (RIC)` + year"
+  )),
+  data = df_panel %>% filter(high_emission_sector == 0),
+  vcov = ~ `Identifier (RIC)`
+)
+
+summary(high_model)
+summary(low_model)
+```
+
+```{r triple difference model}
+triple_model <- feols(
+  as.formula(paste0(
+    y_var, " ~ treatment_exposed * post_announcement * high_emission_sector + log(total_assets) + roa + leverage | ",
+    "`Identifier (RIC)` + year"
+  )),
+  data = df_panel,
+  vcov = ~ `Identifier (RIC)`
+)
+
+summary(triple_model)
+```
+
+```{r etable}
+etable(
+  high_model,
+  low_model,
+  triple_model,
+  headers = c("Carbon-Intensive", "Other Sectors", "Pooled Triple-Diff"),
+  drop = c("log(total_assets)", "roa", "leverage", "Constant"),
+  keep = c("%treatment_exposedTRUE:post_announcementTRUE",
+           "%treatment_exposedTRUE:post_announcementTRUE:high_emission_sector1"),
+  se.below = TRUE,
+  digits = 3
+)
+```
+
+## Robustness Checks
+
+```{r baseline model for robusntess}
+summary(fe_model) #see cell named: "r base plus controlled plus fixed effects"
+```
+
+```{r uk firms as control group}
+uk_control_model <- feols(
+  as.formula(paste0(
+    y_var, " ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage | ",
+    "`Identifier (RIC)` + year"
+  )),
+  data = df_panel %>%
+    filter(treatment_exposed == TRUE | UK_based == TRUE), #filter the data panel to only include treatment exposed firms, and UK_based firms
+  vcov = ~ `Identifier (RIC)`
+)
+
+summary(uk_control_model)
+```
 
 
