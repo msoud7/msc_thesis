@@ -1062,6 +1062,25 @@ uk_control_model <- feols(
 summary(uk_control_model)
 ```
 
+```{r placebo test with uk as treated group}
+#uses the untreated UK group as the treated group
+df_placebo <- df_panel %>%
+  filter(group %in% c("Placebo", "Control")) %>%
+  mutate(fake_treatment = ifelse(group == "Placebo", 1, 0))
+
+placebo_model <- feols(
+  as.formula(paste0(
+    y_var, " ~ fake_treatment * post_announcement + total_assets_log + leverage + roa | ",
+    "`Identifier (RIC)` + year"
+  )),
+  data = df_placebo,
+  vcov = ~ `Identifier (RIC)`
+)
+
+summary(placebo_model)
+```
+
+
 ```{r placebo treatment T-3}
 #this model checks a different treatment year, in this case 2019 or time T - 3
 #first we filter the dataset to exclude the treatment period
