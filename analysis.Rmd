@@ -79,6 +79,7 @@ df_panel <- read.csv("data/CSRD_thesis_data/panel_final.csv", check.names = FALS
     #policy shock
     post_csrd = year >= 2024,
     post_announcement = year >= 2022,
+    placebo_post_2019 = year >= 2019,
     #emissions
     total_emissions_log = log(scope_1_and_scope_2_and_scope_3_combined_reported_or_estimated_total + 1),
     scope1_emissions_log = log(scope_1_combined_reported_or_estimated_total + 1),
@@ -291,6 +292,24 @@ df_panel <- df_panel %>%
     #robustness check
     greenwashing_environmental_alt = esg_disclosure_z - environmental_performance_z #robustness check
   ) %>% 
+  ungroup()
+
+#full sample alternative (robustness)
+df_panel <- df_panel %>%
+  mutate(
+    esg_disclosure_z_raw = as.numeric(scale(esg_disclosure_score)),
+    esg_performance_z_raw = as.numeric(scale(esg_score)),
+    greenwashing_esg_raw = esg_disclosure_z_raw - esg_performance_z_raw
+  )
+
+#year clustered alternative (robustness)
+df_panel <- df_panel %>%
+  group_by(year) %>%
+  mutate(
+    esg_disclosure_z_y = as.numeric(scale(esg_disclosure_score)),
+    esg_performance_z_y = as.numeric(scale(esg_score)),
+    greenwashing_esg_y = esg_disclosure_z_y - esg_performance_z_y
+  ) %>%
   ungroup()
 ```
 
@@ -1007,6 +1026,60 @@ uk_control_model <- feols(
 )
 
 summary(uk_control_model)
+```
+
+```{r placebo treatment T-3}
+#this model checks a different treatment year, in this case 2019 or time T - 3
+#first we filter the dataset to exclude the treatment period
+df_placebo <- df_panel %>%
+  filter(year <= 2021)
+
+#then we run the model
+placebo_model_2019 <- feols(
+  as.formula(paste0(
+    y_var, " ~ treatment_exposed * placebo_post_2019 + log(total_assets) + roa + leverage | ",
+    "`Identifier (RIC)` + year"
+  )),
+  data = df_placebo,
+  vcov = ~ `Identifier (RIC)`
+)
+
+summary(placebo_model_2019)
+```
+
+```{r propensity score matching}
+
+```
+
+```{r no industry z-scoring}
+#no clustering by the industry or year, just the raw score
+no_cluster_model <- feols(
+  as.formula(paste0(
+    "greenwashing_esg_raw ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage | ",
+    "`Identifier (RIC)` + year"
+  )),
+  data = df_panel,
+  vcov = ~ `Identifier (RIC)`
+)
+
+summary(no_cluster_model)
+
+#year-standardized greenwashing index
+y_cluster_model <- feols(
+  as.formula(paste0(
+    "greenwashing_esg_y ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage | ",
+    "`Identifier (RIC)` + year"
+  )),
+  data = df_panel,
+  vcov = ~ `Identifier (RIC)`
+)
+
+summary(y_cluster_model)
+```
+
+```{r winsorization }
+#managing of extreme outliers, take the bottom and top 5% and set to the 5th percentile value, and 95th percentile respectively 
+
 ```
 
 
