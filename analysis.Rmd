@@ -31,6 +31,7 @@ library(knitr)
 library(kableExtra)
 library(scales)
 library(car)
+library(gt)
 
 eu_countries <- c(
   "Austria", "Belgium", "Bulgaria", "Croatia", "Cyprus", "Czech Republic",
@@ -447,8 +448,7 @@ p1 | p2 | p3
 ## Greenwashing index
 
 ```{r list of greenwashing metrics}
-greenwashing_metrics <- c("greenwashing_esg", "greenwashing_environmental", "greenwashing_environmental_alt", "greenwashing_social", 
-                         "greenwashing_governance", "gw_dorfleitner_utz", "gw_env_dorfleitner_utz")
+greenwashing_metrics <- c("greenwashing_esg", "greenwashing_environmental", "greenwashing_environmental_alt", "greenwashing_social", "greenwashing_governance", "gw_dorfleitner_utz", "gw_env_dorfleitner_utz")
 ```
 
 
@@ -534,9 +534,12 @@ data.frame(
 
 ### Descriptives of the chosen metric
 
-```{r gw-environmental-descriptives, results='asis'}
-y_var <- "greenwashing_esg"
+```{r choice of the metric}
+y_var <- "greenwashing_environmental"
+```
 
+
+```{r gw-environmental-descriptives, results='asis'}
 df_panel %>%
   summarise(
     `Mean` = round(mean(.data[[y_var]], na.rm = TRUE), 3),
@@ -637,26 +640,33 @@ table_3_data %>%
 df_event <- df_panel %>% 
   filter(group %in% c("Treatment", "Control"))
 
-event_study <- feols(greenwashing_esg ~ i(year, treatment_exposed, ref = 2021) + 
-                     log(total_assets) + leverage + roa | `Identifier (RIC)` + year, 
-                     cluster = ~`Identifier (RIC)`, 
-                     data = df_event)
+event_study <- feols(
+  as.formula(paste0(
+    y_var, " ~ i(year, treatment_exposed, ref = 2021) + ",
+    "log(total_assets) + leverage + roa | ",
+    "`Identifier (RIC)` + year"
+  )),
+  data = df_event,
+  vcov = ~ `Identifier (RIC)`
+)
 
-# Plot the results
-iplot(event_study, 
-      main = "Event Study: Impact of CSRD on Greenwashing",
-      xlab = "Year", 
-      ylab = "Estimated Effect (Coefficient)")
+iplot(
+  event_study,
+  main = "Event Study: Impact of CSRD on Greenwashing",
+  xlab = "Year",
+  ylab = "Estimated Effect (Coefficient)"
+)
 ```
 
 
 
 ```{r parallel trends test}
 print("Parallel trends SD (pre-2022):")
-df_panel %>%
-  filter(year < 2022) %>%
-  group_by(year, treatment_exposed) %>%
-  summarise(mean_gw = mean(greenwashing_environmental, na.rm = TRUE), .groups = "drop") %>%
+
+df_panel %>% #panel
+  filter(year < 2022) %>% #filter pre-treatment
+  group_by(year, treatment_exposed) %>% #group by year and treatment exposed
+  summarise(mean_gw = mean(.data[[y_var]], na.rm = TRUE), .groups = "drop") %>%
   pivot_wider(names_from = treatment_exposed, values_from = mean_gw) %>%
   mutate(diff = `TRUE` - `FALSE`) %>%
   summarise(sd_diff = sd(diff, na.rm = TRUE), n_years = n()) %>%
@@ -667,14 +677,19 @@ df_panel %>%
 df_panel %>%
   filter(year >= 2019) %>%
   group_by(year, treatment_exposed) %>%
-  summarise(mean_gw = median(greenwashing_environmental, na.rm=TRUE), .groups="drop") %>%
-  ggplot(aes(year, mean_gw, color=treatment_exposed)) +
-  geom_line() + geom_point() +
-  geom_vline(xintercept=2022, linetype="dashed") +
-  geom_vline(xintercept=2024, linetype="dashed") +
+  summarise(mean_gw = median(.data[[y_var]], na.rm = TRUE), .groups = "drop") %>%
+  ggplot(aes(year, mean_gw, color = treatment_exposed)) +
+  geom_line() +
+  geom_point() +
+  geom_vline(xintercept = 2022, linetype = "dashed") +
+  geom_vline(xintercept = 2024, linetype = "dashed") +
   annotate("text", x = 2022, y = Inf, label = "CSRD announcement", angle = 90, vjust = 1.2, hjust = 1) +
   annotate("text", x = 2024, y = Inf, label = "CSRD goes in effect", angle = 90, vjust = 1.2, hjust = 1) +
-  labs(title = "Average Greenwashing temporal trend (2019-2025)", x="Year", y="Average Greenwashing") +
+  labs(
+    title = "Average Greenwashing temporal trend (2019-2025)",
+    x = "Year",
+    y = "Average Greenwashing"
+  ) +
   theme_minimal()
 ```
 
@@ -773,7 +788,7 @@ df_panel %>%
 
 ```{r distribution of relative greenwashing scores of sample firms}
 df_panel %>%
-  ggplot(aes(x = greenwashing_environmental)) +
+  ggplot(aes(x = .data[[y_var]])) +
   geom_histogram(bins = 40, alpha = 0.7) +
   geom_vline(xintercept = 0, linetype = "dashed", color = "red") +
   labs(
@@ -848,10 +863,12 @@ df_panel %>%
   mutate(period = ifelse(year < 2024, "Pre-CSRD", "Post-CSRD")) %>%
   group_by(`GICS Sector Name`, period) %>%
   summarise(
-    mean_gw = mean(greenwashing_environmental, na.rm = TRUE),
+    mean_gw = mean(.data[[y_var]], na.rm = TRUE),
     .groups = "drop"
   ) %>%
-  arrange(desc(mean_gw))
+  arrange(desc(mean_gw)) %>%
+  mutate(mean_gw = round(mean_gw, 3)) %>%
+  gt()
 ```
 
 ```{r bar chart sector motivation}
@@ -859,11 +876,15 @@ df_panel %>%
   filter(treatment_exposed == TRUE) %>%
   mutate(period = ifelse(year < 2024, "Pre-CSRD", "Post-CSRD")) %>%
   group_by(`GICS Sector Name`, period) %>%
-  summarise(mean_gw = mean(greenwashing_environmental, na.rm = TRUE), .groups = "drop") %>%
+  summarise(mean_gw = mean(.data[[y_var]], na.rm = TRUE), .groups = "drop") %>%
   ggplot(aes(x = `GICS Sector Name`, y = mean_gw, fill = period)) +
   geom_col(position = "dodge") +
   coord_flip() +
-  labs(x = "GICS Sector", y = "Mean Greenwashing Index", title = "Greenwashing by Sector: Treated Firms Only") +
+  labs(
+    x = "GICS Sector",
+    y = "Mean Greenwashing Index",
+    title = "Greenwashing by Sector: Treated Firms Only"
+  ) +
   theme_minimal()
 ```
 
@@ -872,7 +893,7 @@ table_industry_gw <- df_panel %>%
   group_by(`GICS Sector Name`) %>%
   summarise(
     n_firms = n_distinct(`Identifier (RIC)`),
-    greenwashing_score = mean(greenwashing_environmental, na.rm = TRUE),
+    greenwashing_score = mean(.data[[y_var]], na.rm = TRUE),
     .groups = "drop"
   ) %>%
   mutate(
@@ -883,9 +904,22 @@ table_industry_gw <- df_panel %>%
     perc_of_all_firms,
     greenwashing_score
   ) %>%
-  arrange(desc(perc_of_all_firms))
+  arrange(desc(perc_of_all_firms)) %>%
+  gt() %>%
+  fmt_number(
+    columns = c(perc_of_all_firms, greenwashing_score),
+    decimals = 3
+  ) %>%
+  cols_label(
+    Sector = "Sector",
+    perc_of_all_firms = "Share of Firms (%)",
+    greenwashing_score = paste("Average", y_var)
+  ) %>%
+  tab_header(
+    title = "Sector Share of Firms and Average Greenwashing Score"
+  )
 
-kable(table_industry_gw, digits = 3, caption = "Sector share of firms and average greenwashing score")
+table_industry_gw
 ```
 
 
