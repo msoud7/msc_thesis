@@ -560,7 +560,6 @@ df_panel %>%
 #define variables and formal names for the table
 descr_vars <- c(
   "greenwashing_esg" = "Greenwashing Index",
-  "greenwashing_environmental" = "Greenwashing Index (Env)",
   "total_assets"               = "Total Assets (EUR)",
   "roa" = "Return on Assets (net income / total assets)",
   "leverage" = "Financial Leverage (Total debt / Total assets)",
@@ -643,7 +642,7 @@ df_event <- df_panel %>%
 
 event_study <- feols(
   as.formula(paste0(
-    y_var, " ~ i(year, treatment_exposed, ref = 2021) + ",
+    y_var, " ~ i(year, treatment_exposed, ref = 2022) + ",
     "log(total_assets) + leverage + roa | ",
     "`Identifier (RIC)` + year"
   )),
@@ -689,7 +688,7 @@ df_panel %>%
   labs(
     title = "Average Greenwashing temporal trend (2019-2025)",
     x = "Year",
-    y = "Average Greenwashing"
+    y = "Average Greenwashing Index"
   ) +
   theme_minimal()
 ```
@@ -924,7 +923,7 @@ table_industry_gw
 ```
 
 
-# Difference-in-differences
+# Difference-in-differences (regular type)
 
 ## H1 Main effect
 
@@ -944,7 +943,7 @@ summary(base_model)
 controls_model <- feols(
   as.formula(paste0(
     y_var, " ~ treatment_exposed * post_announcement", #base
-    "+ log(total_assets) + roa + leverage" #include the controls
+    "+ log(total_assets) + roa + leverage + emissions_trajectory" #include the controls
   )),
   data = df_panel,
   vcov = ~ `Identifier (RIC)`
@@ -957,7 +956,7 @@ summary(controls_model)
 fe_model <- feols(
   as.formula(paste0(
     y_var, " ~ treatment_exposed * post_announcement", #base
-    "+ log(total_assets) + roa + leverage | ", #controls
+    "+ log(total_assets) + roa + leverage + emissions_trajectory |", #controls
     "`Identifier (RIC)` + year" #fixed effects for firm and year
   )),
   data = df_panel,
@@ -971,7 +970,7 @@ summary(fe_model)
 
 ```{r reported model}
 reported_model <- feols(
-  scope1_emissions_log ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage |
+  scope1_emissions_log ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage + emissions_trajectory |
     `Identifier (RIC)` + year,
   data = df_panel %>% filter(scope1_reported == 1, scope1_emissions_log > 0),
   vcov = ~ `Identifier (RIC)`
@@ -982,7 +981,7 @@ summary(reported_model)
 
 ```{r modelled }
 estimated_model <- feols(
-  scope1_emissions_log ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage |
+  scope1_emissions_log ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage + emissions_trajectory |
     `Identifier (RIC)` + year,
   data = df_panel %>% filter(scope1_estimated == 1, scope1_emissions_log > 0),
   vcov = ~ `Identifier (RIC)`
@@ -996,7 +995,8 @@ summary(estimated_model)
 ```{r split sample models}
 high_model <- feols(
   as.formula(paste0(
-    y_var, " ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage | ",
+    y_var, " ~ treatment_exposed * post_announcement",
+    "+ log(total_assets) + roa + leverage + emissions_trajectory| ",
     "`Identifier (RIC)` + year"
   )),
   data = df_panel %>% filter(high_emission_sector == 1),
@@ -1005,7 +1005,8 @@ high_model <- feols(
 
 low_model <- feols(
   as.formula(paste0(
-    y_var, " ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage | ",
+    y_var, " ~ treatment_exposed * post_announcement",
+    "+ log(total_assets) + roa + leverage + emissions_trajectory| ",
     "`Identifier (RIC)` + year"
   )),
   data = df_panel %>% filter(high_emission_sector == 0),
@@ -1019,7 +1020,8 @@ summary(low_model)
 ```{r triple difference model}
 triple_model <- feols(
   as.formula(paste0(
-    y_var, " ~ treatment_exposed * post_announcement * high_emission_sector + log(total_assets) + roa + leverage | ",
+    y_var, " ~ treatment_exposed * post_announcement",
+    "+ log(total_assets) + roa + leverage + emissions_trajectory| ",
     "`Identifier (RIC)` + year"
   )),
   data = df_panel,
@@ -1052,7 +1054,8 @@ summary(fe_model) #see cell named: "r base plus controlled plus fixed effects"
 ```{r uk firms as control group}
 uk_control_model <- feols(
   as.formula(paste0(
-    y_var, " ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage | ",
+    y_var, " ~ treatment_exposed * post_announcement",
+    "+ log(total_assets) + roa + leverage + emissions_trajectory| ",
     "`Identifier (RIC)` + year"
   )),
   data = df_panel %>%
@@ -1071,7 +1074,8 @@ df_placebo <- df_panel %>%
 
 placebo_model <- feols(
   as.formula(paste0(
-    y_var, " ~ fake_treatment * post_announcement + log(total_assets) + leverage + roa | ",
+    y_var, " ~ treatment_exposed * post_announcement",
+    "+ log(total_assets) + roa + leverage + emissions_trajectory| ",
     "`Identifier (RIC)` + year"
   )),
   data = df_placebo,
@@ -1091,7 +1095,8 @@ df_placebo <- df_panel %>%
 #then we run the model
 placebo_model_2019 <- feols(
   as.formula(paste0(
-    y_var, " ~ treatment_exposed * placebo_post_2019 + log(total_assets) + roa + leverage | ",
+    y_var, " ~ treatment_exposed * post_announcement",
+    "+ log(total_assets) + roa + leverage + emissions_trajectory| ",
     "`Identifier (RIC)` + year"
   )),
   data = df_placebo,
@@ -1101,47 +1106,12 @@ placebo_model_2019 <- feols(
 summary(placebo_model_2019)
 ```
 
-```{r propensity score matching}
-ps_model <- glm(
-  treatment_exposed ~ log(total_assets) + roa + leverage + factor(`GICS Sector Name`) + greenwashing_environmental,
-  data = df_panel %>% filter(year == 2021),
-  family = binomial()
-)
-
-df_ps <- df_panel %>%
-  filter(year == 2021, group %in% c("Treatment", "Control")) %>%
-  mutate(propensity_score = predict(ps_model, newdata = ., type = "response")) %>%
-  arrange(propensity_score)
-
-treated <- df_ps %>% filter(group == "Treatment")
-control <- df_ps %>% filter(group == "Control")
-
-matched_control_ids <- sapply(treated$propensity_score, function(ps) {
-  control$`Identifier (RIC)`[which.min(abs(control$propensity_score - ps))]
-})
-
-matched_ids <- unique(c(treated$`Identifier (RIC)`, matched_control_ids))
-
-df_psm_panel <- df_panel %>%
-  filter(`Identifier (RIC)` %in% matched_ids)
-
-fe_model_psm <- feols(
-  as.formula(paste0(
-    y_var, " ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage | ",
-    "`Identifier (RIC)` + year"
-  )),
-  data = df_psm_panel,
-  vcov = ~ `Identifier (RIC)`
-)
-
-summary(fe_model_psm)
-```
-
 ```{r no industry z-scoring}
 #no clustering by the industry or year, just the raw score
 no_cluster_model <- feols(
   as.formula(paste0(
-    "greenwashing_esg_raw ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage | ",
+    "greenwashing_esg_raw ~ treatment_exposed * post_announcement +",
+    "log(total_assets) + roa + leverage + emissions_trajectory | ",
     "`Identifier (RIC)` + year"
   )),
   data = df_panel,
@@ -1153,7 +1123,8 @@ summary(no_cluster_model)
 #year-standardized greenwashing index
 y_cluster_model <- feols(
   as.formula(paste0(
-    "greenwashing_esg_y ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage | ",
+    "greenwashing_esg_y ~ treatment_exposed * post_announcement +",
+    "log(total_assets) + roa + leverage  + emissions_trajectory| ",
     "`Identifier (RIC)` + year"
   )),
   data = df_panel,
@@ -1180,7 +1151,8 @@ df_panel <- df_panel %>%
 
 robustness_model_wins <- feols(
   as.formula(paste0(
-    paste0(y_var, "_wins"), " ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage | ",
+    paste0(y_var, "_wins"), " ~ treatment_exposed * post_announcement +",
+    "log(total_assets) + roa + leverage + emissions_trajectory | ",
     "`Identifier (RIC)` + year"
   )),
   data = df_panel,
@@ -1190,4 +1162,4 @@ robustness_model_wins <- feols(
 summary(robustness_model_wins)
 ```
 
-
+# Difference-in-differences (with matching)
