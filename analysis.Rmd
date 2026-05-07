@@ -26,6 +26,7 @@ library(modelsummary)
 library(psych)
 library(patchwork)
 library(fixest)
+library(MatchIt)
 #pretty tables
 library(knitr)
 library(kableExtra)
@@ -1163,3 +1164,36 @@ summary(robustness_model_wins)
 ```
 
 # Difference-in-differences (with matching)
+
+```{r propensity score matching}
+df_baseline <- df_panel %>% filter(year == 2021) #filter to baseline year closest to intervention but pre-intervention
+
+#generate the formula
+psm_formula <- as.formula(paste("treatment ~ log(total_asset) + `GICS Sector Code` +", y_var)) #matching based on size, industry, and y_var
+
+#run the matching
+psm_match <- matchit(psm_formula, # matching based on size, industry, greenwashing index
+                     data = df_baseline, 
+                     method = "nearest", 
+                     distance = "logit")
+
+#get the list of matched Firm IDs
+matched_ids <- match.data(psm_match)$firm_id
+#filter the original panel data to only keep the matched firms
+df_psm_panel <- df_panel %>% filter(firm_id %in% matched_ids)
+```
+
+```{r Coarsened exact matching}
+#build the formula dynamically
+cem_formula <- as.formula(paste("treatment ~ log(total_asset) + `GICS Sector Code` +", y_var))
+#match based on the formula
+cem_match <- matchit(cem_formula, 
+                     data = df_baseline, 
+                     method = "cem", 
+                     k2k = TRUE) # 'k2k = TRUE' ensures 1-to-1 matching (one control for one treatment)
+#get matched IDS
+matched_ids_cem <- match.data(cem_match)$firm_id
+#filter the data
+df_cem_panel <- df_panel %>% filter(firm_id %in% matched_ids_cem)
+```
+
