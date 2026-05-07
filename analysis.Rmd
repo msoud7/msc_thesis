@@ -189,41 +189,42 @@ all_vars <- c(environmental_vars, social_vars, governance_vars)
 ```{r build the disclosure score}
 construct_disclosure_scores <- function(df, environmental_vars, social_vars, governance_vars) {
   
-  # Helper: score a single variable
   score_var <- function(x) {
-    # Detect binary (logical or only TRUE/FALSE/NA values)
     is_binary <- is.logical(x) || all(x %in% c(TRUE, FALSE, 1, 0, NA))
-    
-    if (is_binary) {
-      # Binary: TRUE/1 → 1, FALSE/0 → 0, NA → 0
-      return(as.integer(!is.na(x) & as.logical(x)))
-    } else {
-      # Numerical: reported (non-NA) → 1, NA → 0
-      return(as.integer(!is.na(x)))
-    }
+    if (is_binary) return(as.integer(!is.na(x) & as.logical(x)))
+    return(as.integer(!is.na(x)))
   }
-  
-  all_vars <- c(environmental_vars, social_vars, governance_vars)
-  
-  # Score each variable group
+
+  # Score the matrices
   env_scores <- df[environmental_vars] %>% mutate(across(everything(), score_var))
   soc_scores <- df[social_vars]        %>% mutate(across(everything(), score_var))
   gov_scores <- df[governance_vars]    %>% mutate(across(everything(), score_var))
+
+  # THE FIX: Treat Scope 1, 2, 3 as ONE POINT total.
+  # This removes the artificial "3-point floor" and the "0-weighted spike."
+  scope_vars <- c("scope_1_combined_reported_or_estimated_total",
+                  "scope_2_combined_reported_or_estimated_total",
+                  "scope_3_combined_reported_or_estimated_total")
   
+  # Calculate Environmental: (Everything else) + (1 point if ANY scope is reported)
+  env_sum <- rowSums(env_scores %>% select(-all_of(scope_vars))) + 
+             as.integer(rowSums(env_scores[scope_vars]) > 0)
+
   df <- df %>%
     mutate(
-      environmental_disclosure_score = rowSums(env_scores),
+      environmental_disclosure_score = env_sum,
       social_disclosure_score        = rowSums(soc_scores),
       governance_disclosure_score    = rowSums(gov_scores),
+      # Total score is now a clean integer scale
       esg_disclosure_score           = environmental_disclosure_score +
                                        social_disclosure_score +
                                        governance_disclosure_score
-      
     )
   
   return(df)
 }
 
+# run the calculation
 df_panel <- construct_disclosure_scores(
   df_panel,
   environmental_vars,
@@ -345,7 +346,7 @@ df_panel <- df_panel %>%
 # number of firms, years, observations
 df_panel %>% 
   summarise(N_obs = comma(n()), N_firms = comma(n_distinct(`ISIN Code`)), 
-            Years = n_distinct(year)) %>%
+            Years = n_distinct(year), N_countries = comma(n_distinct(`Country of Incorporation`))) %>%
   kable(booktabs = TRUE) %>%
   kable_styling()
 
@@ -369,11 +370,11 @@ df_panel %>%
 
 #observations per treatment status
 df_panel %>% 
-  count(treatment_exposed) %>% 
-  mutate(Group = ifelse(treatment_exposed, "Treated", "Control"),
-         Share = percent(n/sum(n))) %>%
-  select(Group, Obs=n, Share) %>%
-  kable(booktabs=T) %>% kable_styling()
+  count(group) %>% 
+  mutate(Share = scales::percent(n / sum(n))) %>% 
+  rename(Group = group, Obs = n) %>% 
+  kable(booktabs = TRUE) %>% 
+  kable_styling(latex_options = "striped") # Optional: adds better visual structure
 
 #observations per GICS sector
 df_panel %>% 
@@ -535,7 +536,7 @@ data.frame(
 ### Descriptives of the chosen metric
 
 ```{r choice of the metric}
-y_var <- "greenwashing_environmental"
+y_var <- "greenwashing_esg"
 ```
 
 
@@ -1063,14 +1064,14 @@ summary(uk_control_model)
 ```
 
 ```{r placebo test with uk as treated group}
-#uses the untreated UK group as the treated group
+#uses the untreated UK group as the treated group to check for spillover/invalid info
 df_placebo <- df_panel %>%
   filter(group %in% c("Placebo", "Control")) %>%
   mutate(fake_treatment = ifelse(group == "Placebo", 1, 0))
 
 placebo_model <- feols(
   as.formula(paste0(
-    y_var, " ~ fake_treatment * post_announcement + total_assets_log + leverage + roa | ",
+    y_var, " ~ fake_treatment * post_announcement + log(total_assets) + leverage + roa | ",
     "`Identifier (RIC)` + year"
   )),
   data = df_placebo,
@@ -1101,7 +1102,39 @@ summary(placebo_model_2019)
 ```
 
 ```{r propensity score matching}
+ps_model <- glm(
+  treatment_exposed ~ log(total_assets) + roa + leverage + factor(`GICS Sector Name`) + greenwashing_environmental,
+  data = df_panel %>% filter(year == 2021),
+  family = binomial()
+)
 
+df_ps <- df_panel %>%
+  filter(year == 2021, group %in% c("Treatment", "Control")) %>%
+  mutate(propensity_score = predict(ps_model, newdata = ., type = "response")) %>%
+  arrange(propensity_score)
+
+treated <- df_ps %>% filter(group == "Treatment")
+control <- df_ps %>% filter(group == "Control")
+
+matched_control_ids <- sapply(treated$propensity_score, function(ps) {
+  control$`Identifier (RIC)`[which.min(abs(control$propensity_score - ps))]
+})
+
+matched_ids <- unique(c(treated$`Identifier (RIC)`, matched_control_ids))
+
+df_psm_panel <- df_panel %>%
+  filter(`Identifier (RIC)` %in% matched_ids)
+
+fe_model_psm <- feols(
+  as.formula(paste0(
+    y_var, " ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage | ",
+    "`Identifier (RIC)` + year"
+  )),
+  data = df_psm_panel,
+  vcov = ~ `Identifier (RIC)`
+)
+
+summary(fe_model_psm)
 ```
 
 ```{r no industry z-scoring}
