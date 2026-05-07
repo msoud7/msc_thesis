@@ -1207,3 +1207,34 @@ df_cem_panel <- df_panel %>% filter(`Identifier (RIC)` %in% matched_ids_cem)
 summary(cem_match)
 ```
 
+## Diff-in-diff regressions
+
+```{r CEM matched data regression}
+fe_model_cem <- feols(
+  as.formula(paste0(
+    y_var, " ~ treatment_exposed * post_announcement", 
+    " + log(total_assets) + roa + leverage + emissions_trajectory | ",
+    "`Identifier (RIC)` + year"
+  )),
+  data = df_cem_panel,
+  vcov = ~ `Identifier (RIC)`
+)
+
+summary(fe_model_cem)
+```
+
+```{r PSM matched data regression}
+fe_model_psm <- feols(
+  as.formula(paste0(
+    y_var, " ~ treatment_exposed * post_announcement", 
+    " + log(total_assets) + roa + leverage + emissions_trajectory | ",
+    "`Identifier (RIC)` + year"
+  )),
+  data = df_psm_panel %>% filter(year <= 2023),
+  vcov = ~ `Identifier (RIC)`
+)
+
+summary(fe_model_psm)
+```
+
+
