@@ -15,13 +15,13 @@ knitr::opts_chunk$set(
   fig.width = 10,
   fig.height = 6
 )
+
+set.seed(19)
 ```
 
 
 ```{r load packages and key lists}
 library(tidyverse)
-library(ggplot2)
-library(stringr)
 library(modelsummary)
 library(psych)
 library(patchwork)
@@ -123,15 +123,18 @@ df_panel <- read.csv("data/CSRD_thesis_data/panel_final.csv", check.names = FALS
 
 df_panel <- df_panel %>%
   group_by(`Identifier (RIC)`) %>%
+  arrange(year, .by_group = TRUE) %>%
   mutate(
-    # Average % change in log emissions only for the pre-treatment years (2019-2021)
-    emissions_trajectory = mean(
-      ((total_emissions_log - lag(total_emissions_log)) / lag(total_emissions_log))[year %in% 2019:2021], 
-      na.rm = TRUE
+    emissions_change = ifelse(
+      !is.na(lag(total_emissions_log)) & lag(total_emissions_log) != 0,
+      (total_emissions_log - lag(total_emissions_log)) / lag(total_emissions_log),
+      NA_real_
     )
   ) %>%
-  # Fill NAs with 0 to prevent row-loss in regressions
-  mutate(emissions_trajectory = replace_na(emissions_trajectory, 0)) %>%
+  mutate(
+    emissions_trajectory = mean(emissions_change[year %in% 2019:2021], na.rm = TRUE),
+    emissions_trajectory = replace_na(emissions_trajectory, 0)
+  ) %>%
   ungroup()
 
 environmental_vars <- c(
@@ -346,19 +349,34 @@ y_var <- "greenwashing_esg"
 ## Computing the matched DF's 
 
 ```{r propensity score matching}
-df_baseline <- df_panel %>% filter(year == 2021) %>%  #filter to baseline year closest to intervention but pre-intervention
-  filter(!is.na(total_assets), 
-         total_assets > 0,
-         !is.na(`GICS Sector Code`),
-         !is.na(!!sym(y_var)))
+df_baseline <- df_panel %>% 
+  filter(year == 2021) %>%
+  filter(
+    !is.na(total_assets),    total_assets > 0,
+    !is.na(roa),
+    !is.na(leverage),
+    !is.na(`GICS Sector Code`),
+    !is.na(high_emission_sector),
+    !is.na(is_listed_eu),
+    !is.na(in_EU_EU_domicile),
+    !is.na(emissions_trajectory),
+    !is.na(!!sym(y_var))
+  )
 
-#generate the formula
+#define the formula
 psm_formula <- as.formula(
-  "treatment_exposed ~ log(total_assets) + `GICS Sector Code` + roa + high_emission_sector + nfrd_size"
-)#matching based on size, industry 
+  "treatment_exposed ~ log(total_assets) + log(total_assets + 1)^2 +
+   `GICS Sector Code` +
+   roa + leverage +
+   high_emission_sector +
+   nfrd_size +
+   is_listed_eu +
+   in_EU_EU_domicile +
+   emissions_trajectory"
+)
 
 #run the matching
-psm_match <- matchit(psm_formula, # matching based on size, industry, greenwashing index
+psm_match <- matchit(psm_formula,
                      data = df_baseline, 
                      method = "nearest", 
                      distance = "logit")
@@ -372,19 +390,18 @@ summary(psm_match)
 ```
 
 ```{r coarsened exact matching}
-#build the formula dynamically
 cem_formula <- as.formula(
-  "treatment_exposed ~ log(total_assets) + `GICS Sector Code` + roa + high_emission_sector + nfrd_size"
+  "treatment_exposed ~ log(total_assets) + `GICS Sector Code` + high_emission_sector + roa + leverage"
 )
 #match based on the formula
 cem_match <- matchit(cem_formula, 
                      data = df_baseline, 
-                     method = "cem", 
-                     k2k = TRUE) # 'k2k = TRUE' ensures 1-to-1 matching (one control for one treatment)
+                     method = "cem")
 #get matched IDS
 matched_ids_cem <- match.data(cem_match)$`Identifier (RIC)`
 #filter the data
-df_cem_panel <- df_panel %>% filter(`Identifier (RIC)` %in% matched_ids_cem)
+df_cem_panel <- df_panel %>% 
+  filter(`Identifier (RIC)` %in% match.data(cem_match)$`Identifier (RIC)`)
 
 summary(cem_match)
 ```
@@ -511,17 +528,18 @@ greenwashing_metrics <- c("greenwashing_esg", "greenwashing_environmental", "gre
 ```{r summary stats}
 df_analysis %>%
   select(all_of(greenwashing_metrics)) %>%
-  gather(key = "Measure", value = "GW") %>%
+  pivot_longer(cols = everything(), names_to = "Measure", values_to = "GW") %>%
   group_by(Measure) %>%
   summarise(
-    Mean = round(mean(GW, na.rm=T), 3),
-    SD = round(sd(GW, na.rm=T), 3),
-    Median = round(median(GW, na.rm=T), 3),
-    P10 = round(quantile(GW, 0.1, na.rm=T), 3),
-    P90 = round(quantile(GW, 0.9, na.rm=T), 3),
+    Mean = round(mean(GW, na.rm = TRUE), 3),
+    SD = round(sd(GW, na.rm = TRUE), 3),
+    Median = round(median(GW, na.rm = TRUE), 3),
+    P10 = round(quantile(GW, 0.1, na.rm = TRUE), 3),
+    P90 = round(quantile(GW, 0.9, na.rm = TRUE), 3),
     .groups = "drop"
   ) %>%
-  kable(booktabs=T) %>% kable_styling()
+  gt() %>%
+  tab_header(title = "Summary Statistics for Greenwashing Measures")
 ```
 
 
@@ -686,13 +704,13 @@ table_3_data %>%
 ```
 
 
-```{r}
+```{r parallel trends plot}
 df_event <- df_analysis %>% 
   filter(group %in% c("Treatment", "Control"))
 
 event_study <- feols(
   as.formula(paste0(
-    y_var, " ~ i(year, treatment_exposed, ref = 2022) + ",
+    y_var, " ~ i(year, treatment_exposed, ref = 2021) + ",
     "log(total_assets) + leverage + roa | ", #delete control variables
     "`Identifier (RIC)` + year"
   )),
@@ -711,16 +729,16 @@ iplot(
 
 
 ```{r parallel trends test}
-print("Parallel trends SD (pre-2022):")
-
-df_analysis %>% #panel
-  filter(year < 2022) %>% #filter pre-treatment
-  group_by(year, treatment_exposed) %>% #group by year and treatment exposed
+pretrend_test <- df_analysis %>%
+  filter(year < 2022) %>%
+  group_by(year, treatment_exposed) %>%
   summarise(mean_gw = mean(.data[[y_var]], na.rm = TRUE), .groups = "drop") %>%
   pivot_wider(names_from = treatment_exposed, values_from = mean_gw) %>%
-  mutate(diff = `TRUE` - `FALSE`) %>%
-  summarise(sd_diff = sd(diff, na.rm = TRUE), n_years = n()) %>%
-  mutate(t_stat = 0 / sd_diff * sqrt(n_years))
+  mutate(diff = `TRUE` - `FALSE`)
+
+pretrend_test
+
+t.test(pretrend_test$diff, mu = 0)
 ```
 
 ```{r parallel trends visualisation}
