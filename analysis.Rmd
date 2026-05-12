@@ -339,13 +339,67 @@ df_panel <- df_panel %>%
   )
 ```
 
+```{r choice of the metric}
+y_var <- "greenwashing_esg"
+```
+
+## Computing the matched DF's 
+
+```{r propensity score matching}
+df_baseline <- df_panel %>% filter(year == 2021) %>%  #filter to baseline year closest to intervention but pre-intervention
+  filter(!is.na(total_assets), 
+         total_assets > 0,
+         !is.na(`GICS Sector Code`),
+         !is.na(!!sym(y_var)))
+
+#generate the formula
+psm_formula <- as.formula(
+  "treatment_exposed ~ log(total_assets) + `GICS Sector Code` + roa + high_emission_sector + nfrd_size"
+)#matching based on size, industry 
+
+#run the matching
+psm_match <- matchit(psm_formula, # matching based on size, industry, greenwashing index
+                     data = df_baseline, 
+                     method = "nearest", 
+                     distance = "logit")
+
+#get the list of matched Firm IDs
+matched_ids <- match.data(psm_match)$`Identifier (RIC)`
+#filter the original panel data to only keep the matched firms
+df_psm_panel <- df_panel %>% filter(`Identifier (RIC)` %in% matched_ids)
+
+summary(psm_match)
+```
+
+```{r coarsened exact matching}
+#build the formula dynamically
+cem_formula <- as.formula(
+  "treatment_exposed ~ log(total_assets) + `GICS Sector Code` + roa + high_emission_sector + nfrd_size"
+)
+#match based on the formula
+cem_match <- matchit(cem_formula, 
+                     data = df_baseline, 
+                     method = "cem", 
+                     k2k = TRUE) # 'k2k = TRUE' ensures 1-to-1 matching (one control for one treatment)
+#get matched IDS
+matched_ids_cem <- match.data(cem_match)$`Identifier (RIC)`
+#filter the data
+df_cem_panel <- df_panel %>% filter(`Identifier (RIC)` %in% matched_ids_cem)
+
+summary(cem_match)
+```
+
+```{r choosing the dynamic dataset for analysis}
+df_analysis <- df_cem_panel
+```
+
 # Standard descriptive statistics
 
 ## Sample structure
 
 ```{r basic panel structure}
 # number of firms, years, observations
-df_panel %>% 
+df_analysis %>% 
   summarise(N_obs = comma(n()), N_firms = comma(n_distinct(`ISIN Code`)), 
             Years = n_distinct(year), N_countries = comma(n_distinct(`Country of Incorporation`))) %>%
   kable(booktabs = TRUE) %>%
@@ -353,7 +407,7 @@ df_panel %>%
 
 
 # observations per year
-df_panel %>% 
+df_analysis %>% 
   count(year) %>% 
   mutate(Share = percent(n/sum(n))) %>%
   select(Year=year, Obs=n, Share) %>%
@@ -362,7 +416,7 @@ df_panel %>%
 
 ```{r N observations by country, treatment status, and GICS sector}
 # observations per country
-df_panel %>% 
+df_analysis %>% 
   count(`Country of Incorporation`, sort=T) %>% 
   head(10) %>% 
   mutate(Share = percent(n/sum(n))) %>%
@@ -370,7 +424,7 @@ df_panel %>%
   kable(booktabs=T) %>% kable_styling()
 
 #observations per treatment status
-df_panel %>% 
+df_analysis %>% 
   count(group) %>% 
   mutate(Share = scales::percent(n / sum(n))) %>% 
   rename(Group = group, Obs = n) %>% 
@@ -378,7 +432,7 @@ df_panel %>%
   kable_styling(latex_options = "striped") # Optional: adds better visual structure
 
 #observations per GICS sector
-df_panel %>% 
+df_analysis %>% 
   filter(`GICS Sector Name` != "Financials") %>%
   count(`GICS Sector Name`, sort=T) %>% 
   mutate(Share = percent(n/sum(n))) %>%
@@ -386,7 +440,7 @@ df_panel %>%
   kable(booktabs=T) %>% kable_styling()
 
 #observations treated per year
-df_panel %>% 
+df_analysis %>% 
   count(year, treatment_exposed) %>% 
   pivot_wider(names_from = treatment_exposed, values_from = n) %>%
   mutate(Pct_Treated = scales::percent(`TRUE` / (`FALSE` + `TRUE`))) %>%
@@ -396,7 +450,7 @@ df_panel %>%
 
 #observation oversight table
 #columns: group based on a condition that differs for each group, firm-years, unique firms, countries, treatment year
-observation_table <- df_panel %>%
+observation_table <- df_analysis %>%
   group_by(group) %>%
   summarise(
     `Firm-Years` = n(),
@@ -412,7 +466,7 @@ print(observation_table)
 
 ```{r visualisations of sample}
 # 1. Stacked bar: Year × Treatment
-p1 <- df_panel %>%
+p1 <- df_analysis %>%
   count(year, treatment_exposed) %>%
   mutate(group = ifelse(treatment_exposed, "Treated", "Control")) %>%
   ggplot(aes(year, n, fill = group)) +
@@ -423,7 +477,7 @@ p1 <- df_panel %>%
   theme(legend.position = "bottom")
 
 # 2. EU vs Non-EU bar
-p2 <- df_panel %>%
+p2 <- df_analysis %>%
   mutate(eu = `Country of Incorporation` %in% eu_countries) %>%
   count(eu) %>%
   mutate(group = ifelse(eu, "EU", "Non-EU")) %>%
@@ -434,7 +488,7 @@ p2 <- df_panel %>%
   theme(legend.position = "none")
 
 # 3. Sector by treatment (dodge)
-p3 <- df_panel %>%
+p3 <- df_analysis %>%
   filter(`GICS Sector Name` != "Financials") %>%
   count(`GICS Sector Name`, treatment_exposed) %>%
   ggplot(aes(reorder(`GICS Sector Name`, n), n, fill = treatment_exposed)) +
@@ -455,7 +509,7 @@ greenwashing_metrics <- c("greenwashing_esg", "greenwashing_environmental", "gre
 
 
 ```{r summary stats}
-df_panel %>%
+df_analysis %>%
   select(all_of(greenwashing_metrics)) %>%
   gather(key = "Measure", value = "GW") %>%
   group_by(Measure) %>%
@@ -474,7 +528,7 @@ df_panel %>%
 ### Choosing which metric to use
 
 ```{r correlation matrix of greenwashing metrics}
-df_panel %>%
+df_analysis %>%
   select(all_of(greenwashing_metrics)) %>%
   cor(use = "complete.obs") %>%
   round(3) %>%
@@ -483,7 +537,7 @@ df_panel %>%
 ```
 
 ```{r kernal density plot of GW by treatment PRE/POST}
-df_density <- df_panel %>%
+df_density <- df_analysis %>%
   filter(year >= 2019) %>%
   mutate(
     period = if_else(year <= 2021, "Pre-treatment (2019–2021)", "Post-treatment (2022–2025)"),
@@ -512,15 +566,15 @@ ggplot(df_density, aes(x = greenwashing_environmental, fill = period, color = pe
 
 ```{r metrics correlation with fines}
 fines_corrs <- sapply(greenwashing_metrics, function(metric) {
-  cor(df_panel$greenwashing_fines_controversies_count, 
-      df_panel[[metric]], use = "complete.obs")
+  cor(df_analysis$greenwashing_fines_controversies_count, 
+      df_analysis[[metric]], use = "complete.obs")
 })
 
 did_r2 <- numeric(length(greenwashing_metrics))
 for(i in seq_along(greenwashing_metrics)) {
   metric <- greenwashing_metrics[i]
   formula_str <- paste0("roa ~ treatment_exposed * post_csrd + ", metric, " | `Identifier (RIC)` + year")
-  model <- feols(as.formula(formula_str), data = df_panel, cluster = ~`Identifier (RIC)`)
+  model <- feols(as.formula(formula_str), data = df_analysis, cluster = ~`Identifier (RIC)`)
   did_r2[i] <- r2(model)
 }
 
@@ -536,13 +590,8 @@ data.frame(
 
 ### Descriptives of the chosen metric
 
-```{r choice of the metric}
-y_var <- "greenwashing_esg"
-```
-
-
-```{r gw-environmental-descriptives, results='asis'}
-df_panel %>%
+```{r gw-descriptives, results='asis'}
+df_analysis %>%
   summarise(
     `Mean` = round(mean(.data[[y_var]], na.rm = TRUE), 3),
     `SD` = round(sd(.data[[y_var]], na.rm = TRUE), 3),
@@ -560,16 +609,16 @@ df_panel %>%
 ```{r descriptive statistics of points of interest}
 #define variables and formal names for the table
 descr_vars <- c(
-  "greenwashing_esg" = "Greenwashing Index",
   "total_assets"               = "Total Assets (EUR)",
   "roa" = "Return on Assets (net income / total assets)",
   "leverage" = "Financial Leverage (Total debt / Total assets)",
   "emissions_trajectory" = "Pre-treatment carbon trend (2019-2021)"
 )
+descr_vars <- c(setNames("Greenwashing Index", y_var), descr_vars)
 
 #build the table
 desc_table <- map_dfr(names(descr_vars), function(v) {
-  x <- df_panel[[v]]
+  x <- df_analysis[[v]]
   
   # Scale assets to Billions only for display
   if(v == "total_assets") x <- x / 1e9
@@ -600,7 +649,7 @@ desc_table %>%
 
 ```{r balance test}
 #filter for pre-treatment years
-df_pre <- df_panel %>%
+df_pre <- df_analysis %>%
   filter(year >= 2019 & year <= 2021) %>%
   filter(group %in% c("Treatment", "Control"))
 
@@ -638,13 +687,13 @@ table_3_data %>%
 
 
 ```{r}
-df_event <- df_panel %>% 
+df_event <- df_analysis %>% 
   filter(group %in% c("Treatment", "Control"))
 
 event_study <- feols(
   as.formula(paste0(
     y_var, " ~ i(year, treatment_exposed, ref = 2022) + ",
-    "log(total_assets) + leverage + roa | ",
+    "log(total_assets) + leverage + roa | ", #delete control variables
     "`Identifier (RIC)` + year"
   )),
   data = df_event,
@@ -664,7 +713,7 @@ iplot(
 ```{r parallel trends test}
 print("Parallel trends SD (pre-2022):")
 
-df_panel %>% #panel
+df_analysis %>% #panel
   filter(year < 2022) %>% #filter pre-treatment
   group_by(year, treatment_exposed) %>% #group by year and treatment exposed
   summarise(mean_gw = mean(.data[[y_var]], na.rm = TRUE), .groups = "drop") %>%
@@ -675,7 +724,7 @@ df_panel %>% #panel
 ```
 
 ```{r parallel trends visualisation}
-df_panel %>%
+df_analysis %>%
   filter(year >= 2019) %>%
   group_by(year, treatment_exposed) %>%
   summarise(mean_gw = median(.data[[y_var]], na.rm = TRUE), .groups = "drop") %>%
@@ -697,7 +746,7 @@ df_panel %>%
 # ESG Disclosure and performance scores
 
 ```{r environmental scores by year and treatment}
-df_panel %>%
+df_analysis %>%
   mutate(period = ifelse(year < 2024, "Pre-CSRD", "Post-CSRD")) %>%
   group_by(period, treatment_exposed) %>%
   summarise(
@@ -713,7 +762,7 @@ df_panel %>%
 ```
 
 ```{r disclosure vs performance z score}
-df_panel %>%
+df_analysis %>%
   filter(year >= 2019) %>%
   group_by(year, treatment_exposed) %>%
   summarise(
@@ -731,7 +780,7 @@ df_panel %>%
 ```
 
 ```{r country distribution of ESG disclosure vs ESG performance scores}
-df_panel %>%
+df_analysis %>%
   filter(year >= 2019) %>%
   ggplot(aes(x = environmental_performance_z,
              y = environmental_disclosure_z)) +
@@ -746,7 +795,7 @@ df_panel %>%
 ```
 
 ```{r}
-df_panel %>%
+df_analysis %>%
   filter(year <= 2023) %>%
   group_by(`Country of Headquarters`) %>%
   summarise(
@@ -767,7 +816,7 @@ df_panel %>%
 ```
 
 ```{r boxplots of ESG performance and ESG disclosure score for sample firms}
-df_panel %>%
+df_analysis %>%
   select(environmental_pillar_score, environmental_disclosure_score) %>%
   pivot_longer(cols = everything(),
                names_to = "metric",
@@ -788,7 +837,7 @@ df_panel %>%
 ```
 
 ```{r distribution of relative greenwashing scores of sample firms}
-df_panel %>%
+df_analysis %>%
   ggplot(aes(x = .data[[y_var]])) +
   geom_histogram(bins = 40, alpha = 0.7) +
   geom_vline(xintercept = 0, linetype = "dashed", color = "red") +
@@ -803,7 +852,7 @@ df_panel %>%
 ## Emissions analysis
 
 ```{r emissions summary table}
-df_panel %>%
+df_analysis %>%
   mutate(period = ifelse(year < 2024, "Pre-CSRD", "Post-CSRD")) %>%
   group_by(period, treatment_exposed) %>%
   summarise(
@@ -819,7 +868,7 @@ df_panel %>%
 ```
 
 ```{r emissions time series}
-df_panel %>%
+df_analysis %>%
   filter(year >= 2018) %>%
   group_by(year, treatment_exposed) %>%
   summarise(
@@ -839,7 +888,7 @@ df_panel %>%
 ```
 
 ```{r reporting method mix}
-df_panel %>%
+df_analysis %>%
   mutate(reported_scope1 = case_when(
     scope_1_combined_reported_or_estimated_method == "Reported_value" ~ "Reported",
     TRUE ~ "Estimated/Modelled"
@@ -859,7 +908,7 @@ df_panel %>%
 ## Industry Heterogeneity
 
 ```{r industry heterogeneity summary}
-df_panel %>%
+df_analysis %>%
   filter(treatment_exposed == TRUE) %>%
   mutate(period = ifelse(year < 2024, "Pre-CSRD", "Post-CSRD")) %>%
   group_by(`GICS Sector Name`, period) %>%
@@ -873,7 +922,7 @@ df_panel %>%
 ```
 
 ```{r bar chart sector motivation}
-df_panel %>%
+df_analysis %>%
   filter(treatment_exposed == TRUE) %>%
   mutate(period = ifelse(year < 2024, "Pre-CSRD", "Post-CSRD")) %>%
   group_by(`GICS Sector Name`, period) %>%
@@ -890,7 +939,7 @@ df_panel %>%
 ```
 
 ```{r table sector motivation}
-table_industry_gw <- df_panel %>%
+table_industry_gw <- df_analysis %>%
   group_by(`GICS Sector Name`) %>%
   summarise(
     n_firms = n_distinct(`Identifier (RIC)`),
@@ -933,7 +982,7 @@ base_model <- feols(
   as.formula(paste0(
     y_var, " ~ treatment_exposed * post_announcement" #base, only the announcement and treatment exposure
   )),
-  data = df_panel,
+  data = df_analysis,
   vcov = ~ `Identifier (RIC)`
 )
 
@@ -946,7 +995,7 @@ controls_model <- feols(
     y_var, " ~ treatment_exposed * post_announcement", #base
     "+ log(total_assets) + roa + leverage + emissions_trajectory" #include the controls
   )),
-  data = df_panel,
+  data = df_analysis,
   vcov = ~ `Identifier (RIC)`
 )
 
@@ -960,7 +1009,7 @@ fe_model <- feols(
     "+ log(total_assets) + roa + leverage + emissions_trajectory |", #controls
     "`Identifier (RIC)` + year" #fixed effects for firm and year
   )),
-  data = df_panel,
+  data = df_analysis,
   vcov = ~ `Identifier (RIC)`
 )
 
@@ -973,7 +1022,7 @@ summary(fe_model)
 reported_model <- feols(
   scope1_emissions_log ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage + emissions_trajectory |
     `Identifier (RIC)` + year,
-  data = df_panel %>% filter(scope1_reported == 1, scope1_emissions_log > 0),
+  data = df_analysis %>% filter(scope1_reported == 1, scope1_emissions_log > 0),
   vcov = ~ `Identifier (RIC)`
 )
 
@@ -984,7 +1033,7 @@ summary(reported_model)
 estimated_model <- feols(
   scope1_emissions_log ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage + emissions_trajectory |
     `Identifier (RIC)` + year,
-  data = df_panel %>% filter(scope1_estimated == 1, scope1_emissions_log > 0),
+  data = df_analysis %>% filter(scope1_estimated == 1, scope1_emissions_log > 0),
   vcov = ~ `Identifier (RIC)`
 )
 
@@ -1000,7 +1049,7 @@ high_model <- feols(
     "+ log(total_assets) + roa + leverage + emissions_trajectory| ",
     "`Identifier (RIC)` + year"
   )),
-  data = df_panel %>% filter(high_emission_sector == 1),
+  data = df_analysis %>% filter(high_emission_sector == 1),
   vcov = ~ `Identifier (RIC)`
 )
 
@@ -1010,7 +1059,7 @@ low_model <- feols(
     "+ log(total_assets) + roa + leverage + emissions_trajectory| ",
     "`Identifier (RIC)` + year"
   )),
-  data = df_panel %>% filter(high_emission_sector == 0),
+  data = df_analysis %>% filter(high_emission_sector == 0),
   vcov = ~ `Identifier (RIC)`
 )
 
@@ -1019,28 +1068,28 @@ summary(low_model)
 ```
 
 ```{r triple difference model}
-triple_model <- feols(
+triple_diff_model <- feols(
   as.formula(paste0(
-    y_var, " ~ treatment_exposed * post_announcement",
-    "+ log(total_assets) + roa + leverage + emissions_trajectory| ",
+    y_var, " ~ treatment_exposed * post_announcement * high_emission_sector",
+    " + log(total_assets) + roa + leverage + emissions_trajectory | ",
     "`Identifier (RIC)` + year"
   )),
-  data = df_panel,
+  data = df_analysis,
   vcov = ~ `Identifier (RIC)`
 )
 
-summary(triple_model)
+summary(triple_diff_model)
 ```
 
 ```{r etable}
 etable(
   high_model,
   low_model,
-  triple_model,
+  triple_diff_model,
   headers = c("Carbon-Intensive", "Other Sectors", "Pooled Triple-Diff"),
   drop = c("log(total_assets)", "roa", "leverage", "Constant"),
   keep = c("%treatment_exposedTRUE:post_announcementTRUE",
-           "%treatment_exposedTRUE:post_announcementTRUE:high_emission_sector1"),
+           "%treatment_exposedTRUE:post_announcementTRUE:high_emission_sectorTRUE"),
   se.below = TRUE,
   digits = 3
 )
@@ -1059,7 +1108,7 @@ uk_control_model <- feols(
     "+ log(total_assets) + roa + leverage + emissions_trajectory| ",
     "`Identifier (RIC)` + year"
   )),
-  data = df_panel %>%
+  data = df_analysis %>%
     filter(treatment_exposed == TRUE | UK_based == TRUE), #filter the data panel to only include treatment exposed firms, and UK_based firms
   vcov = ~ `Identifier (RIC)`
 )
@@ -1069,17 +1118,17 @@ summary(uk_control_model)
 
 ```{r placebo test with uk as treated group}
 #uses the untreated UK group as the treated group to check for spillover/invalid info
-df_placebo <- df_panel %>%
+df_placebo_uk <- df_analysis %>%
   filter(group %in% c("Placebo", "Control")) %>%
-  mutate(fake_treatment = ifelse(group == "Placebo", 1, 0))
+  mutate(
+    # Ensure this is a factor or numeric for the regression
+    fake_treatment = ifelse(group == "Placebo", 1, 0),
+    post_val = ifelse(post_announcement == TRUE, 1, 0)
+  )
 
 placebo_model <- feols(
-  as.formula(paste0(
-    y_var, " ~ treatment_exposed * post_announcement",
-    "+ log(total_assets) + roa + leverage + emissions_trajectory| ",
-    "`Identifier (RIC)` + year"
-  )),
-  data = df_placebo,
+  as.formula(paste0(y_var, " ~ fake_treatment * post_val + log(total_assets) + roa + leverage + emissions_trajectory | `Identifier (RIC)` + year")),
+  data = df_placebo_uk,
   vcov = ~ `Identifier (RIC)`
 )
 
@@ -1090,17 +1139,18 @@ summary(placebo_model)
 ```{r placebo treatment T-3}
 #this model checks a different treatment year, in this case 2019 or time T - 3
 #first we filter the dataset to exclude the treatment period
-df_placebo <- df_panel %>%
-  filter(year <= 2021)
+df_placebo_t3 <- df_analysis %>%
+  filter(year <= 2021) %>% 
+  mutate(fake_post_2019 = ifelse(year >= 2019, 1, 0)) #create fake post period
 
 #then we run the model
 placebo_model_2019 <- feols(
   as.formula(paste0(
-    y_var, " ~ treatment_exposed * post_announcement",
-    "+ log(total_assets) + roa + leverage + emissions_trajectory| ",
+    y_var, " ~ treatment_exposed * fake_post_2019", 
+    " + log(total_assets) + roa + leverage + emissions_trajectory | ",
     "`Identifier (RIC)` + year"
   )),
-  data = df_placebo,
+  data = df_placebo_t3,
   vcov = ~ `Identifier (RIC)`
 )
 
@@ -1115,7 +1165,7 @@ no_cluster_model <- feols(
     "log(total_assets) + roa + leverage + emissions_trajectory | ",
     "`Identifier (RIC)` + year"
   )),
-  data = df_panel,
+  data = df_analysis,
   vcov = ~ `Identifier (RIC)`
 )
 
@@ -1128,7 +1178,7 @@ y_cluster_model <- feols(
     "log(total_assets) + roa + leverage  + emissions_trajectory| ",
     "`Identifier (RIC)` + year"
   )),
-  data = df_panel,
+  data = df_analysis,
   vcov = ~ `Identifier (RIC)`
 )
 
@@ -1145,7 +1195,7 @@ winsorize_5_95 <- function(x) {
   pmax(pmin(x, p95), p5)
 }
 
-df_panel <- df_panel %>%
+df_analysis <- df_analysis %>%
   mutate(
     !!paste0(y_var, "_wins") := winsorize_5_95(.data[[y_var]])
   )
@@ -1156,56 +1206,48 @@ robustness_model_wins <- feols(
     "log(total_assets) + roa + leverage + emissions_trajectory | ",
     "`Identifier (RIC)` + year"
   )),
-  data = df_panel,
+  data = df_analysis,
   vcov = ~ `Identifier (RIC)`
 )
 
 summary(robustness_model_wins)
 ```
 
+```{r summarising table}
+robustness_list <- list(
+  "Baseline"      = fe_model,
+  "UK Control"    = uk_control_model,
+  "Placebo (UK)"  = placebo_model,
+  "Placebo (T-3)" = placebo_model_2019,
+  "Raw Score"     = no_cluster_model,
+  "Winsorized"    = robustness_model_wins
+)
+
+cm <- c(
+  # Main Results & Robustness
+  "treatment_exposedTRUE:post_announcementTRUE" = "DID Interaction (Treat × Post)",
+  "treatment_exposed:post_announcement"         = "DID Interaction (Treat × Post)",
+  
+  # Placebo UK (Using the fixed model names)
+  "fake_treatment:post_val"                     = "Placebo: UK as Treated",
+  "fake_treatmentTRUE:post_announcementTRUE"    = "Placebo: UK as Treated",
+  
+  # Placebo T-3 (Matched to your diagnostic [5])
+  "treatment_exposedTRUE:fake_post_2019"        = "Placebo: 2019 Treatment"
+)
+
+modelsummary(
+  robustness_list,
+  stars = c('*' = .1, '**' = .05, '***' = .01),
+  coef_map = cm,
+  gof_omit = 'DF|Deviance|AIC|BIC|Log.Lik|Within|Pseudo|FE',
+  title = "Table X: Robustness Analysis of CSRD Impact",
+  notes = "Standard errors clustered at firm (RIC) level. Controls included."
+)
+```
+
+
 # Difference-in-differences (with matching)
-
-## Creating the DF's
-
-```{r propensity score matching}
-df_baseline <- df_panel %>% filter(year == 2021) %>%  #filter to baseline year closest to intervention but pre-intervention
-  filter(!is.na(total_assets), 
-         total_assets > 0,
-         !is.na(`GICS Sector Code`),
-         !is.na(!!sym(y_var)))
-
-#generate the formula
-psm_formula <- as.formula(paste("treatment_exposed ~ log(total_assets) + `GICS Sector Code` +", y_var)) #matching based on size, industry, and y_var
-
-#run the matching
-psm_match <- matchit(psm_formula, # matching based on size, industry, greenwashing index
-                     data = df_baseline, 
-                     method = "nearest", 
-                     distance = "logit")
-
-#get the list of matched Firm IDs
-matched_ids <- match.data(psm_match)$`Identifier (RIC)`
-#filter the original panel data to only keep the matched firms
-df_psm_panel <- df_panel %>% filter(`Identifier (RIC)` %in% matched_ids)
-
-summary(psm_match)
-```
-
-```{r coarsened exact matching}
-#build the formula dynamically
-cem_formula <- as.formula(paste("treatment_exposed ~ log(total_assets) + `GICS Sector Code` +", y_var))
-#match based on the formula
-cem_match <- matchit(cem_formula, 
-                     data = df_baseline, 
-                     method = "cem", 
-                     k2k = TRUE) # 'k2k = TRUE' ensures 1-to-1 matching (one control for one treatment)
-#get matched IDS
-matched_ids_cem <- match.data(cem_match)$`Identifier (RIC)`
-#filter the data
-df_cem_panel <- df_panel %>% filter(`Identifier (RIC)` %in% matched_ids_cem)
-
-summary(cem_match)
-```
 
 ## Diff-in-diff regressions
 
@@ -1217,7 +1259,7 @@ fe_model_cem <- feols(
     "`Identifier (RIC)` + year"
   )),
   data = df_cem_panel,
-  vcov = ~ `Identifier (RIC)`
+  vcov = ~ `Identifier (RIC)` #could use "hetero" which accounts for the fact that some firms are noisier than others, but ignores that same firm is repeated over multiple years
 )
 
 summary(fe_model_cem)
