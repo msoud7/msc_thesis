@@ -707,9 +707,9 @@ desc_table %>%
 
 ## Pre-treatment Parallel trends
 
-```{r}
+```{r distribution of greenwashing pre announcement}
 df_descriptive <- df_panel %>%
-  filter(year < 2024) %>%     # pre‑treatment
+  filter(year < 2022) %>%     # pre‑treatment
   select(`Identifier (RIC)`, year, group, greenwashing_esg) %>%
   drop_na(greenwashing_esg)
 
@@ -726,7 +726,7 @@ df_descriptive %>%
     guide = "none"
   ) +
   labs(
-    title = "Distribution of Greenwashing Index\nby group (pre‑treatment period)",
+    title = "Distribution of Greenwashing Index\nby group (pre-treatment period)",
     x = NULL,
     y = "Greenwashing Index (ESG‑based)"
   ) +
@@ -831,8 +831,8 @@ df_analysis %>%
   group_by(year, treatment_exposed) %>%
   summarise(mean_gw = median(.data[[y_var]], na.rm = TRUE), .groups = "drop") %>%
   ggplot(aes(year, mean_gw, color = treatment_exposed)) +
-  geom_line() +
-  geom_point() +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2.5) +
   geom_vline(xintercept = 2022, linetype = "dashed") +
   geom_vline(xintercept = 2024, linetype = "dashed") +
   annotate("text", x = 2022, y = Inf, label = "CSRD announcement", angle = 90, vjust = 1.2, hjust = 1) +
@@ -844,6 +844,54 @@ df_analysis %>%
   ) +
   theme_minimal()
 ```
+
+```{r decomposed time trend}
+df_comp_trend <- df_panel %>%
+  filter(year >= 2017) %>%
+  group_by(year, treatment_exposed) %>%
+  summarise(
+    disclosure = median(esg_disclosure_z, na.rm = TRUE),
+    performance = median(esg_performance_z, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_longer(
+    cols = c(disclosure, performance),
+    names_to = "component",
+    values_to = "value"
+  ) %>%
+  mutate(
+    component = case_when(
+      component == "disclosure"  ~ "ESG disclosure score",
+      component == "performance" ~ "ESG performance score"
+    )
+  )
+
+ggplot(
+  df_comp_trend,
+  aes(x = year,y = value,color = treatment_exposed,linetype = component)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2.5) +
+  # Policy lines for CSRD announcement and effect
+  geom_vline(xintercept = 2022, linetype = "dashed", color = "gray50") +
+  geom_vline(xintercept = 2024, linetype = "dashed", color = "gray50") +
+  # Labels for the events
+  annotate("text", x = 2022, y = Inf, label = "CSRD announcement", angle = 90, vjust = 1.2, hjust = 1) +
+  annotate("text", x = 2024, y = Inf, label = "CSRD goes in effect", angle = 90, vjust = 1.2, hjust = 1) +
+  # Titles and labels
+  labs(
+    title = "Disclosure and performance over time by treatment status",
+    x = "Year",
+    y = "Median standardized score",
+    color = "Treated group",
+    linetype = NULL
+  ) +
+  # Minimal, publication‑style theme
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "bottom"
+  )
+```
+
 
 ```{r disclosure vs performance z score}
 df_analysis %>%
