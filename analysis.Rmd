@@ -828,9 +828,10 @@ Here we observe that the parallel trends hold for each year
 ```{r parallel trends visualisation}
 df_analysis %>%
   filter(year >= 2017) %>%
+  mutate(treatment_exposed = as.factor(treatment_exposed)) %>% 
   group_by(year, treatment_exposed) %>%
   summarise(mean_gw = median(.data[[y_var]], na.rm = TRUE), .groups = "drop") %>%
-  ggplot(aes(year, mean_gw, color = treatment_exposed)) +
+  ggplot(aes(year, mean_gw, color = treatment_exposed, group = treatment_exposed)) +
   geom_line(linewidth = 1) +
   geom_point(size = 2.5) +
   geom_vline(xintercept = 2022, linetype = "dashed") +
@@ -838,7 +839,7 @@ df_analysis %>%
   annotate("text", x = 2022, y = Inf, label = "CSRD announcement", angle = 90, vjust = 1.2, hjust = 1) +
   annotate("text", x = 2024, y = Inf, label = "CSRD goes in effect", angle = 90, vjust = 1.2, hjust = 1) +
   labs(
-    title = "Average Greenwashing temporal trend (2019-2025)",
+    title = "Average Greenwashing temporal trend (2017-2025)", # Note: adjusted title to match filter
     x = "Year",
     y = "Average Greenwashing Index"
   ) +
@@ -898,17 +899,50 @@ df_analysis %>%
   filter(year >= 2019) %>%
   group_by(year, treatment_exposed) %>%
   summarise(
-    disc_z = mean(environmental_disclosure_z, na.rm=T),
-    perf_z = mean(environmental_performance_z, na.rm=T),
-    .groups="drop"
+    disclosure = mean(esg_disclosure_z, na.rm = TRUE),
+    performance = mean(esg_performance_z, na.rm = TRUE),
+    .groups = "drop"
   ) %>%
-  ggplot(aes(year)) +
-  geom_line(aes(y=disc_z, color="Disclosure Z"), size=1) +
-  geom_line(aes(y=perf_z, color="Performance Z"), size=1) +
+  # Pivot to long format for clean, consistent plotting and automated legends
+  pivot_longer(
+    cols = c(disclosure, performance),
+    names_to = "component",
+    values_to = "value"
+  ) %>%
+  mutate(
+    component = case_when(
+      component == "disclosure"  ~ "ESG disclosure score",
+      component == "performance" ~ "ESG performance score"
+    ),
+    # Ensure treatment is treated as a clean factor for faceting labels
+    treatment_exposed = case_when(
+      treatment_exposed == 1 ~ "Treated", # Adjust these if your dummy labels are different
+      treatment_exposed == 0 ~ "Control",
+      TRUE ~ as.character(treatment_exposed)
+    )
+  ) %>%
+  ggplot(aes(x = year, y = value, color = component, group = component)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2.5) +
   facet_wrap(~treatment_exposed) +
-  geom_vline(xintercept=2024, linetype="dashed", color="red") +
-  labs(y="Z-score", title="Disclosure Z > Performance Z → Gap Compression") +
-  theme_minimal()
+  # Policy lines consistent with previous plots
+  geom_vline(xintercept = 2022, linetype = "dashed", color = "gray50") +
+  geom_vline(xintercept = 2024, linetype = "dashed", color = "red") +
+  # Event labels
+  annotate("text", x = 2022, y = Inf, label = "CSRD announcement", angle = 90, vjust = 1.2, hjust = 1, size = 3) +
+  annotate("text", x = 2024, y = Inf, label = "CSRD in effect", angle = 90, vjust = 1.2, hjust = 1, size = 3) +
+  # Titles and labels matching your theme
+  labs(
+    title = "Disclosure Z > Performance Z → Gap Compression",
+    x = "Year",
+    y = "Mean standardized score (Z-score)",
+    color = "Metric"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "bottom",
+    strip.text = element_text(face = "bold", size = 11) # Cleans up facet headers
+  )
 ```
 
 # Difference-in-differences (regular type)
