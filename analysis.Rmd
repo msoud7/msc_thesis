@@ -538,6 +538,104 @@ observation_table <- df_analysis %>%
 print(observation_table)
 ```
 
+```{r plot for region}
+df_region <- df_panel %>%
+  distinct(`Identifier (RIC)`, .keep_all = TRUE) %>%
+  mutate(
+    region = case_when(
+      `Country of Incorporation` %in% c(
+        "Austria","Belgium","Cyprus","Denmark","Finland","France","Germany",
+        "Greece","Hungary","Ireland","Italy","Luxembourg","Malta",
+        "Netherlands","Poland","Portugal","Romania","Slovenia","Spain","Sweden"
+      ) ~ "EU",
+      
+      `Country of Incorporation` %in% c(
+        "United Kingdom","Norway","Switzerland","Iceland"
+      ) ~ "UK & Europe non-EU",
+      
+      `Country of Incorporation` %in% c(
+        "United States","Canada"
+      ) ~ "North America",
+      
+      `Country of Incorporation` %in% c(
+        "China (Mainland)","Hong Kong","India","Indonesia","Japan","Malaysia",
+        "Pakistan","Philippines","Singapore","South Korea","Taiwan","Thailand",
+        "Vietnam","Sri Lanka","Kazakhstan","New Zealand"
+      ) ~ "Asia-Pacific",
+      
+      `Country of Incorporation` %in% c(
+        "Israel","Kuwait","Qatar","Saudi Arabia","United Arab Emirates","Bahrain","Oman","Turkey"
+      ) ~ "Middle East",
+      
+      `Country of Incorporation` %in% c(
+        "Nigeria","South Africa","Kenya","Egypt","Morocco"
+      ) ~ "Africa",
+      
+      `Country of Incorporation` %in% c(
+        "Argentina","Brazil","Chile","Colombia","Mexico","Peru","Panama"
+      ) ~ "Latin America",
+      
+      `Country of Incorporation` %in% c(
+        "Cayman Islands","Jersey","Bermuda","Gibraltar","Guernsey","Faroe Islands",
+        "Isle of Man","Marshall Islands","Liberia","British Virgin Islands","Curacao",
+        "Mauritius"
+      ) ~ "Offshore / other",
+      
+      is.na(`Country of Incorporation`) ~ "Missing",
+      TRUE ~ "Other"
+    )
+  )
+
+df_region %>%
+  count(region) %>%
+  mutate(region = reorder(region, n)) %>%
+  ggplot(aes(x = region, y = n, fill = region)) +
+  geom_col(width = 0.7) +
+  coord_flip() +
+  labs(
+    x = NULL,
+    y = "Number of firms",
+    title = "Sample composition by region"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+```{r by treatment control and placebo firms by region}
+df_region %>%
+  count(region, group) %>%
+  mutate(
+    region = fct_reorder(region, n, .fun = sum),
+    group = factor(group, levels = c("Control", "Placebo", "Treatment"))
+  ) %>%
+  ggplot(aes(x = region, y = n, fill = group)) +
+  geom_col(width = 0.72, color = "white", linewidth = 0.25) +
+  coord_flip() +
+  scale_fill_manual(
+    values = c(
+      "Control" = "#4E79A7",
+      "Placebo" = "#F28E2B",
+      "Treatment" = "#59A14F"
+    )
+  ) +
+  labs(
+    x = NULL,
+    y = "Number of firms",
+    fill = NULL,
+    title = "Treatment, control, and placebo firms by region"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    axis.text.y = element_text(size = 11),
+    axis.text.x = element_text(size = 11),
+    panel.grid.major.y = element_blank(),
+    legend.position = "top",
+    legend.justification = "left",
+    legend.text = element_text(size = 11)
+  )
+```
+
 ```{r kernal density plot of GW by treatment PRE/POST}
 df_density <- df_analysis %>%
   filter() %>%
@@ -778,7 +876,7 @@ estimated_model <- feols(
 summary(estimated_model)
 ```
 
-## Industry Heterogeneity
+## H3 Industry Heterogeneity
 
 ```{r split sample models}
 high_model <- feols(
