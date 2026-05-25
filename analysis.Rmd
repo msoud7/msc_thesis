@@ -1012,6 +1012,80 @@ estimated_model <- feols(
 summary(estimated_model)
 ```
 
+```{r mechanism test visualised}
+# Calculate means AND count observations to catch the N drop
+df_clean_mech <- df_analysis %>%
+  filter(year >= 2019, scope1_emissions_log > 0) %>%
+  mutate(
+    type = case_when(
+      scope1_reported == 1 ~ "Actual Reported",
+      scope1_estimated == 1 ~ "Third-Party Modelled"
+    ),
+    treated = ifelse(treatment_exposed == TRUE, "Treated Firms", "Control Firms")
+  ) %>%
+  filter(!is.na(type)) %>%
+  group_by(year, treated, type) %>%
+  summarise(
+    mean_log = mean(scope1_emissions_log, na.rm = TRUE),
+    n_obs = n(),  # Count how many firms are in this cell
+    .groups = "drop"
+  ) %>%
+  # FILTER OUT noisy years where sample size collapses (e.g., fewer than 5 firms)
+  filter(n_obs >= 5) 
+
+# Index everything cleanly to 2021 = 0
+baselines <- df_clean_mech %>% 
+  filter(year == 2021) %>% 
+  select(treated, type, base = mean_log)
+
+df_clean_mech %>%
+  left_join(baselines, by = c("treated", "type")) %>%
+  mutate(indexed = mean_log - base) %>%
+  
+  # Plotting Treated vs Control side-by-side instead of a 2x2 grid
+  ggplot(aes(x = year, y = indexed, color = type, linetype = type, group = type)) +
+  geom_hline(yintercept = 0, color = "gray60") +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  geom_vline(xintercept = c(2022, 2024), linetype = "dashed", color = "gray40") +
+  
+  # Split columns by Treated vs Control so scales stay tight and comparable
+  facet_wrap(~treated) + 
+  
+  scale_color_manual(values = c("Actual Reported" = "#1F77B4", "Third-Party Modelled" = "#E377C2")) +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    panel.grid.minor = element_blank()
+  ) +
+  labs(
+    title = "H2 Mechanism: Carbon Emissions Trajectory (Indexed to 2021)",
+    y = "Change in Log Emissions from 2021 Baseline",
+    x = "Year"
+  )
+
+df_analysis %>%
+  filter(year >= 2019) %>%
+  mutate(treated = ifelse(treatment_exposed == TRUE, "Treated", "Control")) %>%
+  group_by(year, treated) %>%
+  summarise(
+    pct_reported = mean(scope1_reported, na.rm = TRUE) * 100,
+    .groups = "drop"
+  ) %>%
+  ggplot(aes(x = year, y = pct_reported, color = treated, group = treated)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2.5) +
+  geom_vline(xintercept = c(2022, 2024), linetype = "dashed") +
+  labs(
+    title = "Mechanism: Shift from Modelled to Actual Reporting",
+    y = "% of Firms Disclosing Actual Reported Emissions",
+    x = "Year"
+  ) +
+  theme_minimal()
+```
+
+
 ## H3 Industry Heterogeneity
 
 ```{r split sample models}
@@ -1066,6 +1140,67 @@ etable(
   digits = 3
 )
 ```
+
+```{r}
+#get the list of sectors
+sectors <- unique(df_analysis$`GICS Sector Name`)
+sectors <- sectors[!is.na(sectors)] #remove NA's 
+
+#run the model for each sector and extract the DiD coefficient
+df_gics_quick <- map_dfr(sectors, function(sec) {
+  df_sub <- df_analysis %>% filter(`GICS Sector Name` == sec)
+  
+  tryCatch({
+    model <- feols(
+      as.formula(paste0(
+        y_var, " ~ treatment_exposed * post_announcement + ",
+        "log(total_assets) + roa + leverage + emissions_trajectory | `Identifier (RIC)` + year"
+      )),
+      data = df_sub,
+      vcov = ~ `Identifier (RIC)`
+    )
+    
+    ct <- as.data.frame(coeftable(model))
+    ci <- as.data.frame(confint(model, level = 0.95))
+    row_name <- "treatment_exposedTRUE:post_announcementTRUE"
+    
+    tibble(
+      sector = sec,
+      estimate = ct[row_name, 1],
+      conf.low = ci[row_name, 1],
+      conf.high = ci[row_name, 2]
+    )
+  }, error = function(e) {
+    return(NULL) # Skip if a sector doesn't have enough data to converge
+  })
+})
+
+#pretty plot
+ggplot(df_gics_quick, aes(x = estimate, y = reorder(sector, estimate))) +
+  # Make the 0-line subtle so it doesn't scream at you
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50", linewidth = 0.8) +
+  
+  # Thicken the lines a bit, make the central dot cleaner
+  geom_pointrange(aes(xmin = conf.low, xmax = conf.high), 
+                  color = "#2C3E50", size = 0.7, linewidth = 1) +
+  
+  # Strip out distracting vertical gridlines so the focus is purely on the zero line
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank(), # Removes horizontal line clutter
+    axis.text.y = element_text(face = "bold", color = "black"),
+    plot.title = element_text(face = "bold", size = 14)
+  ) +
+  
+  labs(
+    title = "H3 Heterogeneity: CSRD Effect by GICS Sector",
+    subtitle = "Point estimates and 95% confidence intervals",
+    x = "Estimated Treatment Effect (ATT)",
+    y = NULL
+  )
+```
+
 
 ## Robustness Checks
 
@@ -1272,3 +1407,86 @@ modelsummary(
   notes = "Standard errors clustered at firm (RIC) level. Controls included."
 )
 ```
+
+
+## Forest plot
+
+```{r plot of all coefficients}
+# function to extract fixest coefficients cleanly with 95% CIs
+extract_fixest <- function(model) {
+  ct <- as.data.frame(coeftable(model))
+  ci <- as.data.frame(confint(model, level = 0.95))
+  
+  tibble(
+    term = rownames(ct),
+    estimate = ct[[1]],      
+    conf.low = ci[[1]],      
+    conf.high = ci[[2]]      
+  )
+}
+
+# Combine H1 baseline models with robustness list into one plotting list
+master_plot_list <- c(
+  list(
+    "1. Base Model (No Controls/FE)" = base_model,
+    "2. Base Model + Firm Controls"  = controls_model
+  ),
+  robustness_list
+)
+
+# map through the master list
+df_plot_data <- map_dfr(master_plot_list, extract_fixest, .id = "specification") %>%
+  # filter down to only the primary interaction terms
+  filter(term %in% c(
+    "treatment_exposedTRUE:post_announcementTRUE",
+    "fake_treatment:post_val",
+    "treatment_exposedTRUE:fake_post_2019"
+  )) %>%
+  # clean up labels
+  mutate(
+    type = case_when(
+      specification %in% c("1. Base Model (No Controls/FE)", "2. Base Model + Firm Controls") ~ "H1 Baseline Build-up", #baseline build
+      specification == "Sophisticated model" ~ "Main Model (Firm & Year FE)", #main model
+      specification %in% c("Placebo (UK)", "Placebo (T-3)") ~ "Placebo Tests", #placebo tests
+      specification %in% c("Propensity score matching", "Coarsed exact matching", "MDM matching") ~ "Matching Extensions", #matching algortihtms
+      TRUE ~ "Alternative Specifications" #else
+    ),
+    # clean up names
+    specification = case_when(
+      specification == "Sophisticated model" ~ "3. Main Model (Firm & Year FE)",
+      specification == "Raw GW"              ~ "Alternative DV: Raw GW Index",
+      specification == "Year clustered GW"    ~ "Alternative DV: Year Standardized",
+      specification == "Industry clustered GW"~ "Alternative DV: Industry Standardized",
+      TRUE ~ specification
+    )
+  )
+
+# generate the forest plot
+ggplot(df_plot_data, aes(x = estimate, y = fct_rev(fct_inorder(specification)), color = type)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50", linewidth = 0.8) + #vertical line at 0
+  geom_pointrange(aes(xmin = conf.low, xmax = conf.high), size = 0.7, linewidth = 1) + #add point estimates and 95% intervals
+  scale_color_manual(values = c(
+    "H1 Baseline Build-up" = "#34495E",      
+    "Main Model (Firm & Year FE)" = "#1F77B4",
+    "Alternative Specifications" = "#2CA02C",
+    "Matching Extensions" = "#9467BD",   
+    "Placebo Tests" = "#D62728"
+  )) +
+  labs(
+    title = "Stability of the CSRD Treatment Effect (ATT)",
+    subtitle = "Point estimates and 95% confidence intervals across baseline specifications, matching models, and placebos",
+    x = "Estimated Treatment Coefficient (ATT Effect Size)",
+    y = NULL,
+  ) +
+  
+  #adjustments
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank(), # Removes horizontal lines for a cleaner profile
+    axis.text.y = element_text(face = "bold", color = "black"),
+    legend.title = element_blank(),
+    legend.position = "bottom"
+  )
+```
+
