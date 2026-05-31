@@ -1033,15 +1033,28 @@ summary(fe_model)
 
 ```{r the narrative mechanism}
 #dependent variable is the disclosure score
-reported_model <- feols(
-  scope1_emissions_log ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage + emissions_trajectory |
+mechanism_disclosure <- feols(
+  esg_disclosure_z ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage + emissions_trajectory |
     `Identifier (RIC)` + year,
   data = df_analysis %>% filter(scope1_reported == 1, scope1_emissions_log > 0),
   vcov = ~ `Identifier (RIC)`
 )
 
-summary(reported_model)
+summary(mechanism_disclosure)
 ```
+
+```{r the performance mechanism}
+#dependent variable is the standardised performance score
+mechanism_performance <- feols(
+  esg_performance_z ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage + emissions_trajectory |
+    `Identifier (RIC)` + year,
+  data = df_analysis %>% filter(scope1_reported == 1, scope1_emissions_log > 0),
+  vcov = ~ `Identifier (RIC)`
+)
+
+summary(mechanism_performance)
+```
+
 
 ```{r modelled }
 estimated_model <- feols(
