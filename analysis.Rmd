@@ -595,7 +595,7 @@ df_region %>%
   labs(
     x = NULL,
     y = "Number of firms",
-    title = "Sample composition by region"
+    title = "Sample composition by region of incorporation"
   ) +
   theme_minimal() +
   theme(legend.position = "none")
@@ -613,9 +613,9 @@ df_region %>%
   coord_flip() +
   scale_fill_manual(
     values = c(
-      "Control" = "#4E79A7",
-      "Placebo" = "#F28E2B",
-      "Treatment" = "#59A14F"
+      "Control" = "#C0392B",
+      "Placebo" = "#7F8C8D",
+      "Treatment" = "#108A99"
     )
   ) +
   labs(
@@ -656,9 +656,9 @@ ggplot(df_density, aes(x = greenwashing_environmental, fill = period, color = pe
     color = NULL
   ) +
   scale_fill_manual(values = c("Pre-treatment (2017–2021)" = "#1f77b4",
-                               "Post-treatment (2022–2025)" = "#d62728")) +
+                               "Post-treatment (2022–2025)" = "#C0392B")) +
   scale_color_manual(values = c("Pre-treatment (2017–2021)" = "#1f77b4",
-                                "Post-treatment (2022–2025)" = "#d62728")) +
+                                "Post-treatment (2022–2025)" = "#C0392B")) +
   geom_vline(xintercept = 0, linetype = "dotted", color = "black") +
   theme_minimal() +
   theme(legend.position = "bottom")
@@ -719,14 +719,14 @@ df_descriptive %>%
   geom_boxplot(width = 0.75, linewidth = 0.8, outlier.alpha = 0.3) +
   scale_fill_manual(
     values = c(
-      "Control"  = "#4E79A7",
-      "Placebo"  = "#F28E2B",
-      "Treatment" = "#59A14F"
+      "Control"  = "#C0392B",
+      "Placebo"  = "#7F8C8D",
+      "Treatment" = "#108A99"
     ),
     guide = "none"
   ) +
   labs(
-    title = "Distribution of Greenwashing Index\nby group (pre-treatment period)",
+    title = "Distribution of Greenwashing Index\nby group (pre-announcement period)",
     x = NULL,
     y = "Greenwashing Index (ESG‑based)"
   ) +
@@ -747,22 +747,24 @@ df_descriptive %>%
   ) +
   scale_fill_manual(
     values = c(
-      "Control"   = "#4E79A7",
-      "Placebo"   = "#F28E2B",
-      "Treatment" = "#59A14F"
+      "Control"   = "#C0392B",
+      "Placebo"   = "#7F8C8D",
+      "Treatment" = "#108A99"
     ),
     guide = "none"
   ) +
   labs(
-    title = "Distribution of Greenwashing Index\nby group (pre-treatment period)",
+    title = "Distribution of Greenwashing Index\nby group (pre-announcement period)",
     x = NULL,
     y = "Greenwashing Index (ESG‑based)"
   ) 
 ```
 
-
 ```{r balance test}
-#filter for pre-treatment years
+# Turn off scientific notation globally for this chunk
+options(scipen = 999)
+
+# filter for pre-treatment years
 df_pre <- df_analysis %>%
   filter(year >= 2019 & year <= 2021) %>%
   filter(group %in% c("Treatment", "Control"))
@@ -772,33 +774,34 @@ table_3_data <- map_dfr(names(descr_vars), function(v) {
   # Conduct t-test: variable ~ group
   t_res <- t.test(df_pre[[v]] ~ df_pre$group)
   
-  # Extract means (Note: R orders groups alphabetically, so check order)
-  # Usually: [1] is Control, [2] is Treatment if alphabetically sorted
+  # Extract means (Note: R orders groups alphabetically)
   means <- t_res$estimate
   p_val <- t_res$p.value
   
+  # Format p-value cleanly for an academic table
+  p_val_formatted <- if(p_val < 0.001) "< 0.001" else as.character(round(p_val, 3))
+  
   data.frame(
     Variable = descr_vars[v],
-    `Treatment Mean` = means[2], # Adjust index based on your group names
-    `Control Mean` = means[1],
-    `Diff (T-C)` = means[2] - means[1],
-    `p-value` = p_val
+    `Treatment Mean` = round(means[2], 3), 
+    `Control Mean` = round(means[1], 3),
+    `Diff (T-C)` = round(means[2] - means[1], 3),
+    `p-value` = p_val_formatted,
+    check.names = FALSE # Prevents R from converting spaces to dots in column names
   )
 })
 
 table_3_data %>%
   kable(
     format = "html",
-    digits = 3,
+    align = c("l", "r", "r", "r", "r"),
     caption = "Table 3: Pre-Treatment Balance Test (2019–2021 Means)",
     col.names = c("Variable", "Treatment Mean", "Control Mean", "Diff. (T-C)", "p-value")
   ) %>%
   kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = F) %>%
   row_spec(0, bold = TRUE, color = "white", background = "#444444") %>%
-  # Add a footnote to explain the p-values
-  footnote(general = "p-values are from two-sample t-tests comparing Treatment and Control groups during the 2019–2021 period.")
+  footnote(general = "p-values are obtained from two-sample Welch t-tests comparing the Treatment and Control groups during the 2019–2021 baseline window.")
 ```
-
 
 ```{r parallel trends plot}
 df_event <- df_analysis %>% 
@@ -847,49 +850,66 @@ df_analysis %>%
 ```
 
 ```{r decomposed time trend}
-df_comp_trend <- df_panel %>%
+df_trends_long <- df_panel %>%
   filter(year >= 2017) %>%
   group_by(year, treatment_exposed) %>%
   summarise(
-    disclosure = median(esg_disclosure_z, na.rm = TRUE),
-    performance = median(esg_performance_z, na.rm = TRUE),
+    "ESG Disclosure Score" = median(esg_disclosure_z, na.rm = TRUE),
+    "ESG Performance Score" = median(esg_performance_z, na.rm = TRUE),
     .groups = "drop"
   ) %>%
+  # Pivot only the two components into long format
   pivot_longer(
-    cols = c(disclosure, performance),
-    names_to = "component",
-    values_to = "value"
+    cols = c("ESG Disclosure Score", "ESG Performance Score"),
+    names_to = "Metric",
+    values_to = "Value"
   ) %>%
   mutate(
-    component = case_when(
-      component == "disclosure"  ~ "ESG disclosure score",
-      component == "performance" ~ "ESG performance score"
-    )
+    group_label = ifelse(treatment_exposed == TRUE, "Treatment", "Control")
   )
 
 ggplot(
-  df_comp_trend,
-  aes(x = year,y = value,color = treatment_exposed,linetype = component)) +
+  df_trends_long,
+  aes(x = year, y = Value, color = group_label, linetype = Metric, group = interaction(group_label, Metric))
+) +
   geom_line(linewidth = 1) +
   geom_point(size = 2.5) +
+  
   # Policy lines for CSRD announcement and effect
-  geom_vline(xintercept = 2022, linetype = "dashed", color = "gray50") +
-  geom_vline(xintercept = 2024, linetype = "dashed", color = "gray50") +
+  geom_vline(xintercept = c(2022, 2024), linetype = "dashed", color = "gray50") +
+  
   # Labels for the events
-  annotate("text", x = 2022, y = Inf, label = "CSRD announcement", angle = 90, vjust = 1.2, hjust = 1) +
-  annotate("text", x = 2024, y = Inf, label = "CSRD goes in effect", angle = 90, vjust = 1.2, hjust = 1) +
+  annotate("text", x = 2022, y = Inf, label = "CSRD announcement", angle = 90, vjust = 1.2, hjust = 1.1, size = 3.5, color = "gray30") +
+  annotate("text", x = 2024, y = Inf, label = "CSRD goes in effect", angle = 90, vjust = 1.2, hjust = 1.1, size = 3.5, color = "gray30") +
+  
+  # Unified color scheme (consistent with paper)
+  scale_color_manual(values = c(
+    "Control"   = "#C0392B",
+    "Treatment" = "#108A99"
+  )) +
+  
+  # Explicit line types to split disclosure and performance cleanly
+  scale_linetype_manual(values = c(
+    "ESG Disclosure Score"  = "solid",
+    "ESG Performance Score" = "dashed"
+  )) +
+  
   # Titles and labels
   labs(
-    title = "Disclosure and performance over time by treatment status",
+    title = "ESG Disclosure and Performance Trends over Time",
+    subtitle = "Median standardized scores by treatment status",
     x = "Year",
-    y = "Median standardized score",
-    color = "Treated group",
+    y = "Median Standardized Score",
+    color = NULL,
     linetype = NULL
   ) +
+  
   # Minimal, publication‑style theme
   theme_minimal(base_size = 12) +
   theme(
-    legend.position = "bottom"
+    legend.position = "bottom",
+    legend.box = "horizontal",
+    panel.grid.minor = element_blank()
   )
 ```
 
@@ -1042,25 +1062,42 @@ df_clean_mech %>%
   left_join(baselines, by = c("treated", "type")) %>%
   mutate(indexed = mean_log - base) %>%
   
-  # Plotting Treated vs Control side-by-side instead of a 2x2 grid
-  ggplot(aes(x = year, y = indexed, color = type, linetype = type, group = type)) +
+  # 1. Map color to 'treated' group, and linetype/shape to data 'type'
+  ggplot(aes(x = year, y = indexed, color = treated, linetype = type, group = interaction(treated, type))) +
   geom_hline(yintercept = 0, color = "gray60") +
   geom_line(linewidth = 1) +
-  geom_point(size = 2) +
+  geom_point(aes(shape = type), size = 2) + # Distinct point shapes help keep it scannable
   geom_vline(xintercept = c(2022, 2024), linetype = "dashed", color = "gray40") +
   
-  # Split columns by Treated vs Control so scales stay tight and comparable
+  # Split columns by Treated vs Control
   facet_wrap(~treated) + 
   
-  scale_color_manual(values = c("Actual Reported" = "#1F77B4", "Third-Party Modelled" = "#E377C2")) +
+  # 2. Apply your explicit paper color scheme
+  # Note: Make sure these names perfectly match your "treated" column strings (e.g., "Treated Firms" vs "Treatment")
+  scale_color_manual(values = c(
+    "Control Firms" = "#C0392B", 
+    "Treated Firms" = "#108A99"
+  )) +
+  
+  # 3. Force solid for Reported and dashed for Modelled
+  scale_linetype_manual(values = c(
+    "Actual Reported" = "solid", 
+    "Third-Party Modelled" = "dashed"
+  )) +
+  scale_shape_manual(values = c(
+    "Actual Reported" = 16, # Solid circle
+    "Third-Party Modelled" = 17 # Triangle
+  )) +
+  
   theme_minimal(base_size = 11) +
   theme(
     legend.position = "bottom",
     legend.title = element_blank(),
-    panel.grid.minor = element_blank()
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(face = "bold") # Cleans up the facet headers
   ) +
   labs(
-    title = "H2 Mechanism: Carbon Emissions Trajectory (Indexed to 2021)",
+    title = "Carbon Emissions Trajectory (Indexed to 2021)",
     y = "Change in Log Emissions from 2021 Baseline",
     x = "Year"
   )
@@ -1176,25 +1213,36 @@ df_gics_quick <- map_dfr(sectors, function(sec) {
 })
 
 #pretty plot
-ggplot(df_gics_quick, aes(x = estimate, y = reorder(sector, estimate))) +
-  # Make the 0-line subtle so it doesn't scream at you
+high_emission_macro <- c("Energy", "Materials", "Utilities")
+
+df_gics_plot <- df_gics_quick %>%
+  mutate(
+    # Check if the sector belongs to the high emission group
+    is_high_emission = ifelse(sector %in% high_emission_macro, "High-Emission Sectors", "Other Sectors")
+  )
+
+ggplot(df_gics_plot, aes(x = estimate, y = reorder(sector, estimate), color = is_high_emission)) +
   geom_vline(xintercept = 0, linetype = "dashed", color = "gray50", linewidth = 0.8) +
+  geom_pointrange(aes(xmin = conf.low, xmax = conf.high), size = 0.7, linewidth = 1) +
   
-  # Thicken the lines a bit, make the central dot cleaner
-  geom_pointrange(aes(xmin = conf.low, xmax = conf.high), 
-                  color = "#2C3E50", size = 0.7, linewidth = 1) +
+  # Inject manual scale to match your academic paper profile
+  # Using Crimson/Red for the high-emission focus group and slate gray for the rest
+  scale_color_manual(values = c(
+    "High-Emission Sectors" = "#C0392B", 
+    "Other Sectors"         = "#7F8C8D"
+  )) +
   
-  # Strip out distracting vertical gridlines so the focus is purely on the zero line
   theme_minimal(base_size = 12) +
   theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
     panel.grid.minor = element_blank(),
-    panel.grid.major.y = element_blank(), # Removes horizontal line clutter
+    panel.grid.major.y = element_blank(),
     axis.text.y = element_text(face = "bold", color = "black"),
     plot.title = element_text(face = "bold", size = 14)
   ) +
-  
   labs(
-    title = "H3 Heterogeneity: CSRD Effect by GICS Sector",
+    title = "CSRD Effect by GICS Sector",
     subtitle = "Point estimates and 95% confidence intervals",
     x = "Estimated Treatment Effect (ATT)",
     y = NULL
