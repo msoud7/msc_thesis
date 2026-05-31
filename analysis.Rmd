@@ -120,6 +120,7 @@ df_panel_og <- read.csv("data/CSRD_thesis_data/panel_final.csv", check.names = F
     leverage = total_debt_actual/market_capitalization, #create leverage variable
     roa = net_income_after_tax / total_assets, #create roa variable
     high_emission_sector = `GICS Industry Name` %in% high_emission_sectors, #defines high emission sectors
+    low_emission_sector = !(`GICS Industry Name` %in% high_emission_sectors),
     is_listed_eu = `Country of Exchange` %in% eu_countries, #defines whether a company is listed in the eu
     #size standards
     has_high_employees = ifelse(is.na(number_of_employees), FALSE, number_of_employees > 500), #whether a company exceeds NFRD size threshold regarding employees
@@ -490,12 +491,32 @@ df_analysis %>%
 
 ```{r N observations by country, treatment status, and GICS sector}
 # observations per country
-df_analysis %>% 
-  count(`Country of Incorporation`, sort=T) %>% 
-  head(10) %>% 
-  mutate(Share = percent(n/sum(n))) %>%
-  select(Country=`Country of Incorporation`, Obs=n, Share) %>%
-  kable(booktabs=T) %>% kable_styling()
+geo_table <- df_analysis %>% 
+  group_by(Country = `Country of Incorporation`) %>% 
+  summarise(
+    Obs = n(),
+    `Unique Firms` = n_distinct(`ISIN Code`)
+  ) %>% 
+  ungroup() %>% 
+  arrange(desc(Obs)) %>% 
+  mutate(Share = percent(Obs / sum(Obs))) %>%
+  select(Country, Obs, `Unique Firms`, Share) %>%
+  kable(
+    format = "html", 
+    booktabs = TRUE, 
+    caption = "Geographic Sample Distribution and Composition"
+  ) %>% 
+  kable_styling(
+    bootstrap_options = c("striped", "condensed"), 
+    full_width = FALSE,
+    font_size = 14
+  ) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#444444")
+
+save_kable(geo_table, file = "geographic_distribution.png", zoom = 2)
+
+geo_table
+
 
 #observations per treatment status
 df_analysis %>% 
@@ -1010,7 +1031,8 @@ summary(fe_model)
 
 ## H2 Mechanism test
 
-```{r reported model}
+```{r the narrative mechanism}
+#dependent variable is the disclosure score
 reported_model <- feols(
   scope1_emissions_log ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage + emissions_trajectory |
     `Identifier (RIC)` + year,
@@ -1125,58 +1147,24 @@ df_analysis %>%
 
 ## H3 Industry Heterogeneity
 
-```{r split sample models}
-high_model <- feols(
-  as.formula(paste0(
-    y_var, " ~ treatment_exposed * post_announcement",
-    "+ log(total_assets) + roa + leverage + emissions_trajectory| ",
-    "`Identifier (RIC)` + year"
-  )),
-  data = df_analysis %>% filter(high_emission_sector == 1),
-  vcov = ~ `Identifier (RIC)`
-)
+```{r triple d formula}
+# Define your formula cleanly
+triple_d_formula <- as.formula(paste0(
+  y_var, " ~ treatment_exposed * post_announcement * low_emission_sector + ",
+  "log(total_assets) + roa + leverage + emissions_trajectory | ",
+  "`Identifier (RIC)` + year"
+))
 
-low_model <- feols(
-  as.formula(paste0(
-    y_var, " ~ treatment_exposed * post_announcement",
-    "+ log(total_assets) + roa + leverage + emissions_trajectory| ",
-    "`Identifier (RIC)` + year"
-  )),
-  data = df_analysis %>% filter(high_emission_sector == 0),
-  vcov = ~ `Identifier (RIC)`
-)
-
-summary(high_model)
-summary(low_model)
-```
-
-```{r triple difference model}
-triple_diff_model <- feols(
-  as.formula(paste0(
-    y_var, " ~ treatment_exposed * post_announcement * high_emission_sector",
-    " + log(total_assets) + roa + leverage + emissions_trajectory | ",
-    "`Identifier (RIC)` + year"
-  )),
+# Run the fixed-effects OLS
+triple_d <- feols(
+  triple_d_formula,
   data = df_analysis,
-  vcov = ~ `Identifier (RIC)`
+  vcov = ~ `Identifier (RIC)` # Clusters standard errors at the firm level
 )
 
-summary(triple_diff_model)
+summary(triple_d)
 ```
 
-```{r etable}
-etable(
-  high_model,
-  low_model,
-  triple_diff_model,
-  headers = c("Carbon-Intensive", "Other Sectors", "Pooled Triple-Diff"),
-  drop = c("log(total_assets)", "roa", "leverage", "Constant"),
-  keep = c("%treatment_exposedTRUE:post_announcementTRUE",
-           "%treatment_exposedTRUE:post_announcementTRUE:high_emission_sectorTRUE"),
-  se.below = TRUE,
-  digits = 3
-)
-```
 
 ```{r}
 #get the list of sectors
