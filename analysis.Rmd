@@ -119,6 +119,8 @@ df_panel_og <- read.csv("data/CSRD_thesis_data/panel_final.csv", check.names = F
   mutate(
     leverage = total_debt_actual/market_capitalization, #create leverage variable
     roa = net_income_after_tax / total_assets, #create roa variable
+    tobins_q = market_capitalization / total_assets, #create tobin q variable
+    share_turnover = turnover / market_capitalization, #share turnover
     high_emission_sector = `GICS Industry Name` %in% high_emission_sectors, #defines high emission sectors
     low_emission_sector = !(`GICS Industry Name` %in% high_emission_sectors),
     is_listed_eu = `Country of Exchange` %in% eu_countries, #defines whether a company is listed in the eu
@@ -833,7 +835,7 @@ df_event <- df_analysis %>%
 event_study <- feols(
   as.formula(paste0(
     y_var, " ~ i(year, treatment_exposed, ref = 2021)", 
-    " | `Identifier (RIC)` + year"
+    " + log(total_assets) + roa + leverage | `Identifier (RIC)` + year"
   )),
   data = df_event,
   vcov = ~ `Identifier (RIC)`
