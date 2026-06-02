@@ -1185,7 +1185,7 @@ summary(triple_d)
 ```{r triple d formula with environmental as dep}
 # Define your formula cleanly
 triple_d_formula <- as.formula(paste0(
-  "greenwashing_environmental ~ treatment_exposed * post_announcement * high_emission_sector + ",
+  "greenwashing_environmental ~ treatment_exposed * post_announcement * low_emission_sector + ",
   "log(total_assets) + roa + leverage + share_turnover + tobins_q  | ",
   "`Identifier (RIC)` + year"
 ))
@@ -1242,7 +1242,7 @@ high_emission_macro <- c("Energy", "Materials", "Utilities")
 df_gics_plot <- df_gics_quick %>%
   mutate(
     # Check if the sector belongs to the high emission group
-    is_high_emission = ifelse(sector %in% high_emission_macro, "High-Emission Sectors", "Other Sectors")
+    is_high_emission = ifelse(sector %in% high_emission_macro, "High-Emission Sectors", "Low-Emission Sectors")
   )
 
 ggplot(df_gics_plot, aes(x = estimate, y = reorder(sector, estimate), color = is_high_emission)) +
@@ -1253,7 +1253,7 @@ ggplot(df_gics_plot, aes(x = estimate, y = reorder(sector, estimate), color = is
   # Using Crimson/Red for the high-emission focus group and slate gray for the rest
   scale_color_manual(values = c(
     "High-Emission Sectors" = "#C0392B", 
-    "Other Sectors"         = "#7F8C8D"
+    "Low-Emission Sectors"         = "#7F8C8D"
   )) +
   
   theme_minimal(base_size = 12) +
