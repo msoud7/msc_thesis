@@ -383,7 +383,8 @@ covariates <- c(
   "log_total_assets",
   "roa",
   "leverage",
-  "emissions_trajectory",
+  "tobins_q",
+  "share_turnover",
   "gics_sector_code"
 )
 
@@ -692,10 +693,11 @@ ggplot(df_density, aes(x = greenwashing_environmental, fill = period, color = pe
 ```{r descriptive statistics of points of interest}
 #define variables and formal names for the table
 descr_vars <- c(
-  "total_assets"               = "Total Assets (EUR)",
+  "total_assets"               = "Total Assets (Billion EUR)",
   "roa" = "Return on Assets (net income / total assets)",
   "leverage" = "Financial Leverage (Total debt / Total assets)",
-  "emissions_trajectory" = "Pre-treatment carbon trend (2019-2021)"
+  "share_turnover" = "share turnover / market capitalisation",
+  "tobins_q" = "Market Valuation (Market capitalisation / total assets)"
 )
 descr_vars <- c(setNames("Greenwashing Index", y_var), descr_vars)
 
@@ -835,7 +837,7 @@ df_event <- df_analysis %>%
 event_study <- feols(
   as.formula(paste0(
     y_var, " ~ i(year, treatment_exposed, ref = 2021)", 
-    " + log(total_assets) + roa + leverage | `Identifier (RIC)` + year"
+    " + log(total_assets) + roa + leverage + share_turnover + tobins_q | `Identifier (RIC)` + year"
   )),
   data = df_event,
   vcov = ~ `Identifier (RIC)`
@@ -1008,7 +1010,7 @@ summary(base_model)
 controls_model <- feols(
   as.formula(paste0(
     y_var, " ~ treatment_exposed * post_announcement", #base
-    "+ log(total_assets) + roa + leverage + emissions_trajectory" #include the controls
+    "+ log(total_assets) + roa + leverage + share_turnover + tobins_q " #include the controls
   )),
   data = df_analysis,
   vcov = ~ `Identifier (RIC)`
@@ -1021,7 +1023,7 @@ summary(controls_model)
 fe_model <- feols(
   as.formula(paste0(
     y_var, " ~ treatment_exposed * post_announcement", #base
-    "+ log(total_assets) + roa + leverage + emissions_trajectory |", #controls
+    "+ log(total_assets) + roa + leverage + share_turnover + tobins_q  |", #controls
     "`Identifier (RIC)` + year" #fixed effects for firm and year
   )),
   data = df_analysis,
@@ -1036,7 +1038,7 @@ summary(fe_model)
 ```{r the narrative mechanism}
 #dependent variable is the disclosure score
 mechanism_disclosure <- feols(
-  esg_disclosure_z ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage + emissions_trajectory |
+  esg_disclosure_z ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage + share_turnover + tobins_q |
     `Identifier (RIC)` + year,
   data = df_analysis %>% filter(scope1_reported == 1, scope1_emissions_log > 0),
   vcov = ~ `Identifier (RIC)`
@@ -1048,7 +1050,7 @@ summary(mechanism_disclosure)
 ```{r the performance mechanism}
 #dependent variable is the standardised performance score
 mechanism_performance <- feols(
-  esg_performance_z ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage + emissions_trajectory |
+  esg_performance_z ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage + share_turnover + tobins_q  |
     `Identifier (RIC)` + year,
   data = df_analysis %>% filter(scope1_reported == 1, scope1_emissions_log > 0),
   vcov = ~ `Identifier (RIC)`
@@ -1060,7 +1062,7 @@ summary(mechanism_performance)
 
 ```{r modelled }
 estimated_model <- feols(
-  scope1_emissions_log ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage + emissions_trajectory |
+  scope1_emissions_log ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage + share_turnover + tobins_q  |
     `Identifier (RIC)` + year,
   data = df_analysis %>% filter(scope1_estimated == 1, scope1_emissions_log > 0),
   vcov = ~ `Identifier (RIC)`
@@ -1166,7 +1168,7 @@ df_analysis %>%
 # Define your formula cleanly
 triple_d_formula <- as.formula(paste0(
   y_var, " ~ treatment_exposed * post_announcement * low_emission_sector + ",
-  "log(total_assets) + roa + leverage + emissions_trajectory | ",
+  "log(total_assets) + roa + leverage + share_turnover + tobins_q  | ",
   "`Identifier (RIC)` + year"
 ))
 
@@ -1179,6 +1181,25 @@ triple_d <- feols(
 
 summary(triple_d)
 ```
+
+```{r triple d formula with environmental as dep}
+# Define your formula cleanly
+triple_d_formula <- as.formula(paste0(
+  "greenwashing_environmental ~ treatment_exposed * post_announcement * high_emission_sector + ",
+  "log(total_assets) + roa + leverage + share_turnover + tobins_q  | ",
+  "`Identifier (RIC)` + year"
+))
+
+# Run the fixed-effects OLS
+triple_d <- feols(
+  triple_d_formula,
+  data = df_analysis,
+  vcov = ~ `Identifier (RIC)` # Clusters standard errors at the firm level
+)
+
+summary(triple_d)
+```
+
 
 
 ```{r}
@@ -1194,7 +1215,7 @@ df_gics_quick <- map_dfr(sectors, function(sec) {
     model <- feols(
       as.formula(paste0(
         y_var, " ~ treatment_exposed * post_announcement + ",
-        "log(total_assets) + roa + leverage + emissions_trajectory | `Identifier (RIC)` + year"
+        "log(total_assets) + roa + leverage + share_turnover + tobins_q | `Identifier (RIC)` + year"
       )),
       data = df_sub,
       vcov = ~ `Identifier (RIC)`
@@ -1263,7 +1284,7 @@ summary(fe_model) #see cell named: "r base plus controlled plus fixed effects"
 uk_control_model <- feols(
   as.formula(paste0(
     y_var, " ~ treatment_exposed * post_announcement",
-    "+ log(total_assets) + roa + leverage + emissions_trajectory| ",
+    "+ log(total_assets) + roa + leverage + share_turnover + tobins_q | ",
     "`Identifier (RIC)` + year"
   )),
   data = df_analysis %>%
@@ -1277,7 +1298,7 @@ summary(uk_control_model)
 ```{r placebo test with uk as treated group}
 #uses the untreated UK group as the treated group to check for spillover/invalid info
 df_placebo_uk <- df_analysis %>%
-  filter(group %in% c("Placebo", "Control", "Treatment")) %>%
+  filter(group %in% c("Placebo", "Treatment")) %>%
   mutate(
     # Ensure this is a factor or numeric for the regression
     fake_treatment = ifelse(group == "Placebo", 1, 0),
@@ -1285,7 +1306,7 @@ df_placebo_uk <- df_analysis %>%
   )
 
 placebo_model <- feols(
-  as.formula(paste0(y_var, " ~ fake_treatment * post_val + log(total_assets) + leverage + emissions_trajectory | `Identifier (RIC)` + year")),
+  as.formula(paste0(y_var, " ~ fake_treatment * post_val + log(total_assets) + leverage + share_turnover + tobins_q  | `Identifier (RIC)` + year")),
   data = df_placebo_uk,
   vcov = ~ `Identifier (RIC)`
 )
@@ -1305,7 +1326,7 @@ df_placebo_t3 <- df_analysis %>%
 placebo_model_2019 <- feols(
   as.formula(paste0(
     y_var, " ~ treatment_exposed * fake_post_2019", 
-    " + log(total_assets) + roa + leverage + emissions_trajectory | ",
+    " + log(total_assets) + roa + leverage + share_turnover + tobins_q  | ",
     "`Identifier (RIC)` + year"
   )),
   data = df_placebo_t3,
@@ -1320,7 +1341,7 @@ summary(placebo_model_2019)
 no_cluster_model <- feols(
   as.formula(paste0(
     "greenwashing_esg_raw ~ treatment_exposed * post_announcement +",
-    "log(total_assets) + roa + leverage + emissions_trajectory | ",
+    "log(total_assets) + roa + leverage + share_turnover + tobins_q  | ",
     "`Identifier (RIC)` + year"
   )),
   data = df_analysis,
@@ -1333,7 +1354,7 @@ summary(no_cluster_model)
 y_cluster_model <- feols(
   as.formula(paste0(
     "greenwashing_esg_y ~ treatment_exposed * post_announcement +",
-    "log(total_assets) + roa + leverage  + emissions_trajectory| ",
+    "log(total_assets) + roa + leverage + share_turnover + tobins_q | ",
     "`Identifier (RIC)` + year"
   )),
   data = df_analysis,
@@ -1346,7 +1367,7 @@ summary(y_cluster_model)
 i_cluster_model <- feols(
   as.formula(paste0(
     "greenwashing_esg_i ~ treatment_exposed * post_announcement +",
-    "log(total_assets) + roa + leverage  + emissions_trajectory| ",
+    "log(total_assets) + roa + leverage + share_turnover + tobins_q | ",
     "`Identifier (RIC)` + year"
   )),
   data = df_analysis,
@@ -1374,7 +1395,7 @@ df_analysis <- df_analysis %>%
 robustness_model_wins <- feols(
   as.formula(paste0(
     paste0(y_var, "_wins"), " ~ treatment_exposed * post_announcement +",
-    "log(total_assets) + roa + leverage + emissions_trajectory | ",
+    "log(total_assets) + roa + leverage + share_turnover + tobins_q  | ",
     "`Identifier (RIC)` + year"
   )),
   data = df_analysis,
@@ -1388,7 +1409,7 @@ summary(robustness_model_wins)
 fe_model_psm <- feols(
   as.formula(paste0(
     y_var, " ~ treatment_exposed * post_announcement",
-    " + log(total_assets) + roa + leverage + emissions_trajectory | ",
+    " + log(total_assets) + roa + leverage + share_turnover + tobins_q  | ",
     "`Identifier (RIC)` + year"
   )),
   data = df_psm_panel,
@@ -1403,7 +1424,7 @@ summary(fe_model_psm)
 fe_model_mdm <- feols(
   as.formula(paste0(
     y_var, " ~ treatment_exposed * post_announcement",
-    " + log(total_assets) + roa + leverage + emissions_trajectory | ",
+    " + log(total_assets) + roa + leverage + share_turnover + tobins_q  | ",
     "`Identifier (RIC)` + year"
   )),
   data = df_mdm_panel,
@@ -1417,7 +1438,7 @@ summary(fe_model_mdm)
 fe_model_cem <- feols(
   as.formula(paste0(
     y_var, " ~ treatment_exposed * post_announcement",
-    " + log(total_assets) + roa + leverage + emissions_trajectory | ",
+    " + log(total_assets) + roa + leverage + share_turnover + tobins_q  | ",
     "`Identifier (RIC)` + year"
   )),
   data = df_cem_panel,
