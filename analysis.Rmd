@@ -828,7 +828,7 @@ table_3_data %>%
   footnote(general = "p-values are obtained from two-sample Welch t-tests comparing the Treatment and Control groups during the 2019–2021 baseline window.")
 ```
 
-```{r parallel trends plot}
+```{r parallel trends plot with controls}
 df_event <- df_analysis %>% 
   filter(group %in% c("Treatment", "Control")) %>%
   # Drop NAs in your variables to prevent the model from crashing
@@ -846,6 +846,79 @@ event_study <- feols(
 iplot(
   event_study,
   main = "Event Study: Impact of CSRD on Greenwashing",
+  xlab = "Year",
+  ylab = "Estimated Effect (Coefficient)"
+)
+```
+
+
+
+```{r parallel trends plot no controls}
+df_event <- df_analysis %>% 
+  filter(group %in% c("Treatment", "Control")) %>%
+  # Drop NAs in your variables to prevent the model from crashing
+  filter(!is.na(roa), !is.na(leverage), !is.na(total_assets), !is.na(`GICS Sector Code`))
+
+event_study <- feols(
+  as.formula(paste0(
+    y_var, " ~ i(year, treatment_exposed, ref = 2021)", 
+    "| `Identifier (RIC)` + year"
+  )),
+  data = df_event,
+  vcov = ~ `Identifier (RIC)`
+)
+
+iplot(
+  event_study,
+  main = "Event Study: Impact of CSRD on Greenwashing (No controls)",
+  xlab = "Year",
+  ylab = "Estimated Effect (Coefficient)"
+)
+```
+
+### Event study decoupled GW index
+
+```{r parallel trends plot with controls}
+df_event <- df_analysis %>% 
+  filter(group %in% c("Treatment", "Control")) %>%
+  # Drop NAs in your variables to prevent the model from crashing
+  filter(!is.na(roa), !is.na(leverage), !is.na(total_assets), !is.na(`GICS Sector Code`))
+
+event_study <- feols(
+  as.formula(paste0(
+    "esg_performance_z ~ i(year, treatment_exposed, ref = 2021)", 
+    " + log(total_assets) + roa + leverage + share_turnover + tobins_q | `Identifier (RIC)` + year"
+  )),
+  data = df_event,
+  vcov = ~ `Identifier (RIC)`
+)
+
+iplot(
+  event_study,
+  main = "Event Study: Impact of CSRD on standardised ESG performance score",
+  xlab = "Year",
+  ylab = "Estimated Effect (Coefficient)"
+)
+```
+
+```{r parallel trends plot with controls}
+df_event <- df_analysis %>% 
+  filter(group %in% c("Treatment", "Control")) %>%
+  # Drop NAs in your variables to prevent the model from crashing
+  filter(!is.na(roa), !is.na(leverage), !is.na(total_assets), !is.na(`GICS Sector Code`))
+
+event_study <- feols(
+  as.formula(paste0(
+    "esg_disclosure_z ~ i(year, treatment_exposed, ref = 2021)", 
+    " + log(total_assets) + roa + leverage + share_turnover + tobins_q | `Identifier (RIC)` + year"
+  )),
+  data = df_event,
+  vcov = ~ `Identifier (RIC)`
+)
+
+iplot(
+  event_study,
+  main = "Event Study: Impact of CSRD on standardised ESG disclosure score",
   xlab = "Year",
   ylab = "Estimated Effect (Coefficient)"
 )
@@ -1276,9 +1349,13 @@ ggplot(df_gics_plot, aes(x = estimate, y = reorder(sector, estimate), color = is
 
 ## Robustness Checks
 
+### Baseline robustness
+
 ```{r baseline model for robusntess}
 summary(fe_model) #see cell named: "r base plus controlled plus fixed effects"
 ```
+
+### Placebo tests
 
 ```{r uk firms as control group}
 uk_control_model <- feols(
@@ -1336,6 +1413,8 @@ placebo_model_2019 <- feols(
 summary(placebo_model_2019)
 ```
 
+### Alternative specifications for the Greenwashing index
+
 ```{r no industry z-scoring}
 #no clustering by the industry or year, just the raw score
 no_cluster_model <- feols(
@@ -1377,6 +1456,8 @@ i_cluster_model <- feols(
 summary(i_cluster_model)
 ```
 
+### Sensitivity to outlier handling
+
 ```{r winsorization }
 #managing of extreme outliers, take the bottom and top 5% and set to the 5th percentile value, and 95th percentile respectively 
 
@@ -1405,7 +1486,9 @@ robustness_model_wins <- feols(
 summary(robustness_model_wins)
 ```
 
-```{r psm model with fixed effects}
+### non-parametric matching models
+
+```{r psm model with fixed effects and controls}
 fe_model_psm <- feols(
   as.formula(paste0(
     y_var, " ~ treatment_exposed * post_announcement",
@@ -1419,8 +1502,21 @@ fe_model_psm <- feols(
 summary(fe_model_psm)
 ```
 
+```{r psm model with fixed effects}
+fe_model_psm_no_controls <- feols(
+  as.formula(paste0(
+    y_var, " ~ treatment_exposed * post_announcement",
+    " | ",
+    "`Identifier (RIC)` + year"
+  )),
+  data = df_psm_panel,
+  vcov = ~ `Identifier (RIC)`
+)
 
-```{r mdm model with fixed effects}
+summary(fe_model_psm_no_controls)
+```
+
+```{r mdm model with fixed effects and controls}
 fe_model_mdm <- feols(
   as.formula(paste0(
     y_var, " ~ treatment_exposed * post_announcement",
@@ -1434,7 +1530,21 @@ fe_model_mdm <- feols(
 summary(fe_model_mdm)
 ```
 
-```{r cem model with fixed effects}
+```{r mdm model with fixed effects}
+fe_model_mdm_no_controls <- feols(
+  as.formula(paste0(
+    y_var, " ~ treatment_exposed * post_announcement",
+    " | ",
+    "`Identifier (RIC)` + year"
+  )),
+  data = df_mdm_panel,
+  vcov = ~ `Identifier (RIC)`
+)
+
+summary(fe_model_mdm_no_controls)
+```
+
+```{r cem model with fixed effects and controls}
 fe_model_cem <- feols(
   as.formula(paste0(
     y_var, " ~ treatment_exposed * post_announcement",
@@ -1448,6 +1558,19 @@ fe_model_cem <- feols(
 summary(fe_model_cem)
 ```
 
+```{r}
+fe_model_cem_no_controls <- feols(
+  as.formula(paste0(
+    y_var, " ~ treatment_exposed * post_announcement",
+    " | ",
+    "`Identifier (RIC)` + year"
+  )),
+  data = df_cem_panel,
+  vcov = ~ `Identifier (RIC)`
+)
+
+summary(fe_model_cem_no_controls)
+```
 
 ```{r summarising table}
 robustness_list <- list(
@@ -1460,8 +1583,11 @@ robustness_list <- list(
   "Industry clustered GW" = i_cluster_model,
   "Winsorized" = robustness_model_wins,
   "Propensity score matching" = fe_model_psm,
+  "Propensity score matching (No Controls)" = fe_model_psm_no_controls,
   "Coarsed exact matching" = fe_model_cem,
-  "MDM matching" = fe_model_mdm
+  "Coarsed exact matching (No Controls)" = fe_model_cem_no_controls,
+  "MDM matching" = fe_model_mdm,
+  "MDM matching (No Controls)" = fe_model_mdm_no_controls
 )
 
 cm <- c(
