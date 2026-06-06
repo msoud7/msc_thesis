@@ -92,7 +92,7 @@ glimpse(panel_raw)
 write.csv(panel_raw,
           file = "data/CSRD_thesis_data/panel_raw.csv",
           row.names = FALSE
-          )
+)
 
 # ---------------------------------- convert fy-wide to long format  ----------------------------------
 
@@ -124,4 +124,4 @@ df_panel <- df_long %>%
 write.csv(df_panel,
           file = "data/CSRD_thesis_data/panel_final.csv",
           row.names = FALSE
-          )
+)
