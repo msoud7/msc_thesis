@@ -34,6 +34,9 @@ library(kableExtra)
 library(scales)
 library(car)
 library(gt)
+library(extrafont)
+library(ggfixest)
+library(ggplot2)
 
 eu_countries <- c(
   "Austria", "Belgium", "Bulgaria", "Croatia", "Cyprus", "Czech Republic",
@@ -157,6 +160,17 @@ df_panel <- df_panel %>%
   ungroup()
   
 ```
+
+```{r boxplots of both}
+df_panel %>%
+  pivot_longer(c(esg_score, esg_disclosure_score)) %>%
+  ggplot(aes(x = name, y = value)) +
+  geom_boxplot(fill = "#b4bfff", color = "#5874ff", width = 0.4) +
+  stat_summary(fun = mean, geom = "point", size = 3) +
+  theme_classic() +
+  theme(axis.title = element_blank())
+```
+
 
 ## Computing the matched DF's 
 
@@ -346,7 +360,8 @@ observation_table <- df_analysis %>%
 print(observation_table)
 ```
 
-```{r plot for region}
+
+```{r by treatment control and placebo firms by region}
 df_region <- df_panel %>%
   distinct(`Identifier (RIC)`, .keep_all = TRUE) %>%
   mutate(
@@ -394,55 +409,54 @@ df_region <- df_panel %>%
     )
   )
 
-df_region %>%
-  count(region) %>%
-  mutate(region = reorder(region, n)) %>%
-  ggplot(aes(x = region, y = n, fill = region)) +
-  geom_col(width = 0.7) +
-  coord_flip() +
-  labs(
-    x = NULL,
-    y = "Number of firms",
-    title = "Sample composition by region of incorporation"
-  ) +
-  theme_minimal() +
-  theme(legend.position = "none")
-```
-
-```{r by treatment control and placebo firms by region}
-df_region %>%
+p_region_distribution <- df_region %>%
   count(region, group) %>%
   mutate(
     region = fct_reorder(region, n, .fun = sum),
     group = factor(group, levels = c("Control", "Placebo", "Treatment"))
   ) %>%
   ggplot(aes(x = region, y = n, fill = group)) +
-  geom_col(width = 0.72, color = "white", linewidth = 0.25) +
+  geom_col(width = 0.65) + 
   coord_flip() +
   scale_fill_manual(
     values = c(
-      "Control" = "#C0392B",
-      "Placebo" = "#7F8C8D",
-      "Treatment" = "#108A99"
+      "Control"   = "#C0392B",
+      "Placebo"   = "#7F8C8D", 
+      "Treatment" = "#108A99"   
     )
   ) +
   labs(
     x = NULL,
     y = "Number of firms",
-    fill = NULL,
-    title = "Treatment, control, and placebo firms by region"
+    fill = NULL
   ) +
-  theme_minimal(base_size = 13) +
+  theme_minimal(base_size = 12, base_family = "Times New Roman") +
   theme(
-    plot.title = element_text(face = "bold", size = 14),
-    axis.text.y = element_text(size = 11),
-    axis.text.x = element_text(size = 11),
+    axis.title.x       = element_text(margin = margin(t = 10), size = 11, face = "plain"),
+    axis.text.y        = element_text(size = 11, color = "black"),
+    axis.text.x        = element_text(size = 10, color = "black"),
     panel.grid.major.y = element_blank(),
-    legend.position = "top",
+    panel.grid.major.x = element_line(color = "#E5E7E9", linewidth = 0.4), 
+    panel.grid.minor.x = element_blank(),
+    legend.position    = "top",
     legend.justification = "left",
-    legend.text = element_text(size = 11)
+    legend.text        = element_text(size = 11),
+    legend.margin      = margin(b = -5, l = -10)
   )
+
+p_region_distribution
+
+ggsave(
+  plot     = p_region_distribution,
+  filename = "output/region_distribution.png", 
+  type     = "cairo", 
+  width    = 7, 
+  height   = 4.5,
+  dpi      = 300 
+)
 ```
+
+
 
 ```{r kernal density plot of GW by treatment PRE/POST}
 df_density <- df_analysis %>%
@@ -522,51 +536,51 @@ df_descriptive <- df_panel %>%
   select(`Identifier (RIC)`, year, group, greenwashing_esg) %>%
   drop_na(greenwashing_esg)
 
-df_descriptive %>%
+p_dist <- df_descriptive %>%
   mutate(group = fct_relevel(group, "Control", "Placebo", "Treatment")) %>%
   ggplot(aes(x = group, y = greenwashing_esg, fill = group)) +
-  geom_boxplot(width = 0.75, linewidth = 0.8, outlier.alpha = 0.3) +
+  geom_violin(trim = FALSE, alpha = 0.8, color = "black", linewidth = 0.3) +
+  # Boxplot is back!
+  geom_boxplot(
+    width = 0.18, 
+    outlier.alpha = 0.3,
+    fill = "white", 
+    color = "black",
+    linewidth = 0.6
+  ) +
   scale_fill_manual(
     values = c(
-      "Control"  = "#C0392B",
-      "Placebo"  = "#7F8C8D",
-      "Treatment" = "#108A99"
+      "Control"   = "#C0392B",   
+      "Placebo"   = "#7F8C8D",   
+      "Treatment" = "#108A99"    
     ),
     guide = "none"
   ) +
   labs(
-    title = "Distribution of Greenwashing Index\nby group (pre-announcement period)",
     x = NULL,
-    y = "Greenwashing Index (ESG‑based)"
+    y = "Greenwashing Index (ESG-based)" 
   ) +
-  theme_minimal(base_size = 13) +
+  theme_minimal(base_size = 12, base_family = "Times New Roman") +
   theme(
+    axis.title.y       = element_text(margin = margin(r = 10), size = 11),
+    axis.text.x        = element_text(size = 11, color = "black"),
+    axis.text.y        = element_text(size = 10, color = "black"),
     panel.grid.major.x = element_blank(),
     panel.grid.minor.x = element_blank(),
-    axis.text.x = element_text(size = 12)
+    panel.grid.major.y = element_line(color = "#E5E7E9", linewidth = 0.4),
+    panel.grid.minor.y = element_blank()
   )
 
-df_descriptive %>%
-  mutate(group = fct_relevel(group, "Control", "Placebo", "Treatment")) %>%
-  ggplot(aes(x = group, y = greenwashing_esg, fill = group)) +
-  geom_violin(trim = FALSE, alpha = 0.8) +
-  geom_boxplot(
-    width = 0.2, outlier.alpha = 0.3,
-    fill = "white", linewidth = 0.8
-  ) +
-  scale_fill_manual(
-    values = c(
-      "Control"   = "#C0392B",
-      "Placebo"   = "#7F8C8D",
-      "Treatment" = "#108A99"
-    ),
-    guide = "none"
-  ) +
-  labs(
-    title = "Distribution of Greenwashing Index\nby group (pre-announcement period)",
-    x = NULL,
-    y = "Greenwashing Index (ESG‑based)"
-  ) 
+p_dist
+
+ggsave(
+  plot     = p_dist,
+  filename = "output/greenwashing_distribution.png", 
+  type     = "cairo",  
+  width    = 7, 
+  height   = 4.5,
+  dpi      = 300       
+)
 ```
 
 ```{r balance test}
@@ -615,7 +629,6 @@ table_3_data %>%
 ```{r parallel trends plot with controls}
 df_event <- df_analysis %>% 
   filter(group %in% c("Treatment", "Control")) %>%
-  # Drop NAs in your variables to prevent the model from crashing
   filter(!is.na(roa), !is.na(leverage), !is.na(total_assets), !is.na(`GICS Sector Code`))
 
 event_study <- feols(
@@ -627,34 +640,54 @@ event_study <- feols(
   vcov = ~ `Identifier (RIC)`
 )
 
+# 1. This hidden block saves the clean version to your folder for LaTeX
+png("output/event_study_results.png", width = 7.5, height = 4.8, units = "in", res = 300, family = "Times New Roman")
 iplot(
   event_study,
-  main = "Event Study: Impact of CSRD on Greenwashing",
+  main = "", 
+  xlab = "Year",
+  ylab = "Estimated Effect (Coefficient)"
+)
+dev.off() # Closes the file saver
+
+# 2. This extra line instantly prints it right on your RStudio screen so you can view it!
+iplot(
+  event_study,
+  main = "Event Study: Impact of CSRD on Greenwashing", 
   xlab = "Year",
   ylab = "Estimated Effect (Coefficient)"
 )
 ```
 
 
-
 ```{r parallel trends plot no controls}
 df_event <- df_analysis %>% 
-  filter(group %in% c("Treatment", "Control")) %>%
-  # Drop NAs in your variables to prevent the model from crashing
-  filter(!is.na(roa), !is.na(leverage), !is.na(total_assets), !is.na(`GICS Sector Code`))
+  filter(group %in% c("Treatment", "Control"))
 
-event_study <- feols(
+# Unconditional model: removed log(total_assets), roa, leverage, share_turnover, and tobins_q
+event_study_perf_uncond <- feols(
   as.formula(paste0(
-    y_var, " ~ i(year, treatment_exposed, ref = 2021)", 
-    "| `Identifier (RIC)` + year"
+     y_var, " ~ i(year, treatment_exposed, ref = 2021)", 
+    " | `Identifier (RIC)` + year"
   )),
   data = df_event,
   vcov = ~ `Identifier (RIC)`
 )
 
+# 1. Save the clean, unconditional version for your LaTeX document
+png("output/event_study_performance_uncond.png", width = 7.5, height = 4.8, units = "in", res = 300, family = "Times New Roman")
 iplot(
-  event_study,
-  main = "Event Study: Impact of CSRD on Greenwashing (No controls)",
+  event_study_perf_uncond,
+  main = "", # Title handled by LaTeX caption
+  xlab = "Year",
+  ylab = "Estimated Effect (Coefficient)"
+)
+dev.off()
+
+# 2. View it instantly on your screen right now
+iplot(
+  event_study_perf_uncond,
+  main = "Unconditional Event Study: Impact of CSRD on standardised ESG performance score", 
   xlab = "Year",
   ylab = "Estimated Effect (Coefficient)"
 )
@@ -662,36 +695,12 @@ iplot(
 
 ### Event study decoupled GW index
 
-```{r parallel trends plot with controls}
+```{r performance z parallel trends plot with controls}
 df_event <- df_analysis %>% 
   filter(group %in% c("Treatment", "Control")) %>%
-  # Drop NAs in your variables to prevent the model from crashing
   filter(!is.na(roa), !is.na(leverage), !is.na(total_assets), !is.na(`GICS Sector Code`))
 
-event_study <- feols(
-  as.formula(paste0(
-    "esg_performance_z ~ i(year, treatment_exposed, ref = 2021)", 
-    " + log(total_assets) + roa + leverage + share_turnover + tobins_q | `Identifier (RIC)` + year"
-  )),
-  data = df_event,
-  vcov = ~ `Identifier (RIC)`
-)
-
-iplot(
-  event_study,
-  main = "Event Study: Impact of CSRD on standardised ESG performance score",
-  xlab = "Year",
-  ylab = "Estimated Effect (Coefficient)"
-)
-```
-
-```{r parallel trends plot with controls}
-df_event <- df_analysis %>% 
-  filter(group %in% c("Treatment", "Control")) %>%
-  # Drop NAs in your variables to prevent the model from crashing
-  filter(!is.na(roa), !is.na(leverage), !is.na(total_assets), !is.na(`GICS Sector Code`))
-
-event_study <- feols(
+event_study_disc_cond <- feols(
   as.formula(paste0(
     "esg_disclosure_z ~ i(year, treatment_exposed, ref = 2021)", 
     " + log(total_assets) + roa + leverage + share_turnover + tobins_q | `Identifier (RIC)` + year"
@@ -700,9 +709,49 @@ event_study <- feols(
   vcov = ~ `Identifier (RIC)`
 )
 
+# Save clean conditional version for your LaTeX document
+png("output/event_study_disclosure_cond.png", width = 7.5, height = 4.8, units = "in", res = 300, family = "Times New Roman")
 iplot(
-  event_study,
-  main = "Event Study: Impact of CSRD on standardised ESG disclosure score",
+  event_study_disc_cond,
+  main = "", # Title handled by LaTeX caption
+  xlab = "Year",
+  ylab = "Estimated Effect (Coefficient)"
+)
+dev.off()
+
+# View it instantly on your screen right now
+iplot(
+  event_study_disc_cond,
+  main = "Conditional Event Study: Impact of CSRD on standardised ESG disclosure score", 
+  xlab = "Year",
+  ylab = "Estimated Effect (Coefficient)"
+)
+```
+
+```{r disclosure z parallel trends plot with controls}
+event_study_perf_cond <- feols(
+  as.formula(paste0(
+    "esg_performance_z ~ i(year, treatment_exposed, ref = 2021)", 
+    " + log(total_assets) + roa + leverage + share_turnover + tobins_q | `Identifier (RIC)` + year"
+  )),
+  data = df_event,
+  vcov = ~ `Identifier (RIC)`
+)
+
+# Save clean conditional version for your LaTeX document
+png("output/event_study_performance_cond.png", width = 7.5, height = 4.8, units = "in", res = 300, family = "Times New Roman")
+iplot(
+  event_study_perf_cond,
+  main = "", # Title handled by LaTeX caption
+  xlab = "Year",
+  ylab = "Estimated Effect (Coefficient)"
+)
+dev.off()
+
+# View it instantly on your screen right now
+iplot(
+  event_study_perf_cond,
+  main = "Conditional Event Study: Impact of CSRD on standardised ESG performance score", 
   xlab = "Year",
   ylab = "Estimated Effect (Coefficient)"
 )
@@ -711,24 +760,62 @@ iplot(
 Here we observe that the parallel trends hold for each year
 
 ```{r parallel trends visualisation}
-df_analysis %>%
+p_trend <- df_analysis %>%
   filter(year >= 2017) %>%
-  mutate(treatment_exposed = as.factor(treatment_exposed)) %>% 
-  group_by(year, treatment_exposed) %>%
+  # Convert Boolean flags to clean corporate factor levels
+  mutate(Group = factor(treatment_exposed, 
+                        levels = c("FALSE", "TRUE"), 
+                        labels = c("Control Group", "Treatment Group"))) %>% 
+  group_by(year, Group) %>%
   summarise(mean_gw = median(.data[[y_var]], na.rm = TRUE), .groups = "drop") %>%
-  ggplot(aes(year, mean_gw, color = treatment_exposed, group = treatment_exposed)) +
-  geom_line(linewidth = 1) +
-  geom_point(size = 2.5) +
-  geom_vline(xintercept = 2022, linetype = "dashed") +
-  geom_vline(xintercept = 2024, linetype = "dashed") +
-  annotate("text", x = 2022, y = Inf, label = "CSRD announcement", angle = 90, vjust = 1.2, hjust = 1) +
-  annotate("text", x = 2024, y = Inf, label = "CSRD goes in effect", angle = 90, vjust = 1.2, hjust = 1) +
+  ggplot(aes(x = year, y = mean_gw, color = Group, group = Group)) +
+  
+  # Structural elements
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 2) +
+  
+  # Event Milestones (Cleaned positions and styling)
+  geom_vline(xintercept = 2022, linetype = "dashed", color = "#5D6D7E", linewidth = 0.5) +
+  geom_vline(xintercept = 2024, linetype = "dashed", color = "#5D6D7E", linewidth = 0.5) +
+  
+  # Text annotations placed cleanly inside the canvas space
+  annotate("text", x = 2021.8, y = 0.12, label = "CSRD Announcement", 
+           angle = 90, family = "Times New Roman", size = 3.5, color = "#2C3E50", hjust = 1) +
+  annotate("text", x = 2023.8, y = 0.12, label = "CSRD Effective Date", 
+           angle = 90, family = "Times New Roman", size = 3.5, color = "#2C3E50", hjust = 1) +
+  
+  # Palette & Label Setup
+  scale_color_manual(values = c("Control Group" = "#C0392B", "Treatment Group" = "#108A99")) +
+  scale_x_continuous(breaks = seq(2017, 2025, by = 2)) +
   labs(
-    title = "Average Greenwashing temporal trend (2017-2025)", # Note: adjusted title to match filter
-    x = "Year",
+    x = "Fiscal Year",
     y = "Average Greenwashing Index"
   ) +
-  theme_minimal()
+  
+  # Academic layout theme adjustments
+  theme_minimal(base_size = 12, base_family = "Times New Roman") +
+  theme(
+    legend.title       = element_blank(),
+    legend.position    = "bottom",
+    axis.title.x       = element_text(margin = margin(t = 10)),
+    axis.title.y       = element_text(margin = margin(r = 10)),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    panel.grid.major.y = element_line(color = "#E5E7E9", linewidth = 0.4),
+    panel.grid.minor.y = element_blank()
+  )
+
+p_trend
+
+# High-resolution export
+ggsave(
+  plot     = p_trend,
+  filename = "output/greenwashing_trends.png",
+  type     = "cairo",
+  width    = 7.5,
+  height   = 4.8,
+  dpi      = 300
+)
 ```
 
 ```{r decomposed time trend}
@@ -897,7 +984,7 @@ summary(fe_model)
 mechanism_disclosure <- feols(
   esg_disclosure_z ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage + share_turnover + tobins_q |
     `Identifier (RIC)` + year,
-  data = df_analysis %>% filter(scope1_reported == 1, scope1_emissions_log > 0),
+  data = df_analysis,
   vcov = ~ `Identifier (RIC)`
 )
 
@@ -909,7 +996,7 @@ summary(mechanism_disclosure)
 mechanism_performance <- feols(
   esg_performance_z ~ treatment_exposed * post_announcement + log(total_assets) + roa + leverage + share_turnover + tobins_q  |
     `Identifier (RIC)` + year,
-  data = df_analysis %>% filter(scope1_reported == 1, scope1_emissions_log > 0),
+  data = df_analysis,
   vcov = ~ `Identifier (RIC)`
 )
 
@@ -1060,11 +1147,10 @@ summary(triple_d)
 
 
 ```{r}
-#get the list of sectors
+# 1. Extraction Pipeline 
 sectors <- unique(df_analysis$`GICS Sector Name`)
-sectors <- sectors[!is.na(sectors)] #remove NA's 
+sectors <- sectors[!is.na(sectors)]
 
-#run the model for each sector and extract the DiD coefficient
 df_gics_quick <- map_dfr(sectors, function(sec) {
   df_sub <- df_analysis %>% filter(`GICS Sector Name` == sec)
   
@@ -1089,45 +1175,52 @@ df_gics_quick <- map_dfr(sectors, function(sec) {
       conf.high = ci[row_name, 2]
     )
   }, error = function(e) {
-    return(NULL) # Skip if a sector doesn't have enough data to converge
+    return(NULL) 
   })
 })
 
-#pretty plot
+# 2. Re-labeling to match your paper's exact prose ("Other Sectors")
 high_emission_macro <- c("Energy", "Materials", "Utilities")
 
 df_gics_plot <- df_gics_quick %>%
   mutate(
-    # Check if the sector belongs to the high emission group
-    is_high_emission = ifelse(sector %in% high_emission_macro, "High-Emission Sectors", "Low-Emission Sectors")
+    is_high_emission = ifelse(sector %in% high_emission_macro, "High-Emission Sectors", "Other Sectors")
   )
 
-ggplot(df_gics_plot, aes(x = estimate, y = reorder(sector, estimate), color = is_high_emission)) +
+# 3. Create the ggplot object
+p_sector <- ggplot(df_gics_plot, aes(x = estimate, y = reorder(sector, estimate), color = is_high_emission)) +
   geom_vline(xintercept = 0, linetype = "dashed", color = "gray50", linewidth = 0.8) +
-  geom_pointrange(aes(xmin = conf.low, xmax = conf.high), size = 0.7, linewidth = 1) +
+  geom_pointrange(aes(xmin = conf.low, xmax = conf.high), size = 0.6, linewidth = 0.9) +
   
-  # Inject manual scale to match your academic paper profile
-  # Using Crimson/Red for the high-emission focus group and slate gray for the rest
+  # Professional colors matching your document scheme
   scale_color_manual(values = c(
     "High-Emission Sectors" = "#C0392B", 
-    "Low-Emission Sectors"         = "#7F8C8D"
+    "Other Sectors"         = "#7F8C8D"
   )) +
   
-  theme_minimal(base_size = 12) +
+  theme_minimal(base_size = 11) +
   theme(
     legend.position = "bottom",
     legend.title = element_blank(),
     panel.grid.minor = element_blank(),
     panel.grid.major.y = element_blank(),
+    axis.text.x = element_text(color = "black"),
     axis.text.y = element_text(face = "bold", color = "black"),
-    plot.title = element_text(face = "bold", size = 14)
+    axis.title.x = element_text(margin = margin(t = 10)),
+    plot.margin = margin(15, 15, 15, 15)
   ) +
   labs(
-    title = "CSRD Effect by GICS Sector",
-    subtitle = "Point estimates and 95% confidence intervals",
     x = "Estimated Treatment Effect (ATT)",
     y = NULL
   )
+
+# 4. Save clean file for Overleaf (using explicit Times New Roman device rules)
+if(!dir.exists("output")) dir.create("output")
+ggsave("output/csrd_effect_by_sector.png", plot = p_sector, 
+       width = 7.5, height = 4.8, units = "in", dpi = 300)
+
+# 5. Print it instantly inside the Rmd document/notebook console
+print(p_sector)
 ```
 
 
@@ -1394,7 +1487,7 @@ modelsummary(
 ## Forest plot
 
 ```{r plot of all coefficients}
-# function to extract fixest coefficients cleanly with 95% CIs
+# Clean coefficient extraction engine
 extract_fixest <- function(model) {
   ct <- as.data.frame(coeftable(model))
   ci <- as.data.frame(confint(model, level = 0.95))
@@ -1407,35 +1500,25 @@ extract_fixest <- function(model) {
   )
 }
 
-# Combine H1 baseline models with robustness list into one plotting list
-master_plot_list <- c(
-  list(
-    "1. Base Model (No Controls/FE)" = base_model,
-    "2. Base Model + Firm Controls"  = controls_model
-  ),
-  robustness_list
-)
+# 1. Combine only your robust specifications list
+master_plot_list <- robustness_list
 
-# map through the master list
+# 2. Map, filter out the raw models, and build clean categories
 df_plot_data <- map_dfr(master_plot_list, extract_fixest, .id = "specification") %>%
-  # filter down to only the primary interaction terms
   filter(term %in% c(
     "treatment_exposedTRUE:post_announcementTRUE",
     "fake_treatment:post_val",
     "treatment_exposedTRUE:fake_post_2019"
   )) %>%
-  # clean up labels
   mutate(
     type = case_when(
-      specification %in% c("1. Base Model (No Controls/FE)", "2. Base Model + Firm Controls") ~ "H1 Baseline Build-up", #baseline build
-      specification == "Sophisticated model" ~ "Main Model (Firm & Year FE)", #main model
-      specification %in% c("Placebo (UK)", "Placebo (T-3)") ~ "Placebo Tests", #placebo tests
-      specification %in% c("Propensity score matching", "Coarsed exact matching", "MDM matching") ~ "Matching Extensions", #matching algortihtms
-      TRUE ~ "Alternative Specifications" #else
+      specification == "Sophisticated model" ~ "Main Model (Firm & Year FE)",
+      specification %in% c("Placebo (UK)", "Placebo (T-3)") ~ "Placebo Tests",
+      specification %in% c("Propensity score matching", "Coarsed exact matching", "MDM matching") ~ "Matching Extensions",
+      TRUE ~ "Alternative Specifications"
     ),
-    # clean up names
     specification = case_when(
-      specification == "Sophisticated model" ~ "3. Main Model (Firm & Year FE)",
+      specification == "Sophisticated model" ~ "Main Model (Firm & Year FE)",
       specification == "Raw GW"              ~ "Alternative DV: Raw GW Index",
       specification == "Year clustered GW"    ~ "Alternative DV: Year Standardized",
       specification == "Industry clustered GW"~ "Alternative DV: Industry Standardized",
@@ -1443,31 +1526,37 @@ df_plot_data <- map_dfr(master_plot_list, extract_fixest, .id = "specification")
     )
   )
 
-# generate the forest plot
-ggplot(df_plot_data, aes(x = estimate, y = fct_rev(fct_inorder(specification)), color = type)) +
-  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50", linewidth = 0.8) + #vertical line at 0
-  geom_pointrange(aes(xmin = conf.low, xmax = conf.high), size = 0.7, linewidth = 1) + #add point estimates and 95% intervals
+# 3. Construct the clean ggplot object (no redundant headers)
+p_stability <- ggplot(df_plot_data, aes(x = estimate, y = fct_rev(fct_inorder(specification)), color = type)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50", linewidth = 0.8) + 
+  geom_pointrange(aes(xmin = conf.low, xmax = conf.high), size = 0.6, linewidth = 0.9) + 
   scale_color_manual(values = c(
-    "H1 Baseline Build-up" = "#34495E",      
     "Main Model (Firm & Year FE)" = "#1F77B4",
-    "Alternative Specifications" = "#2CA02C",
-    "Matching Extensions" = "#9467BD",   
-    "Placebo Tests" = "#D62728"
+    "Alternative Specifications"  = "#2CA02C",
+    "Matching Extensions"         = "#9467BD",   
+    "Placebo Tests"               = "#D62728"
   )) +
   labs(
-    title = "Stability of the CSRD Treatment Effect (ATT)",
-    subtitle = "Point estimates and 95% confidence intervals across baseline specifications, matching models, and placebos",
     x = "Estimated Treatment Coefficient (ATT Effect Size)",
-    y = NULL,
+    y = NULL
   ) +
-  
-  #adjustments
-  theme_minimal(base_size = 12) +
+  theme_minimal(base_size = 11) +
   theme(
     panel.grid.minor = element_blank(),
-    panel.grid.major.y = element_blank(), # Removes horizontal lines for a cleaner profile
+    panel.grid.major.y = element_blank(), 
+    axis.text.x = element_text(color = "black"),
     axis.text.y = element_text(face = "bold", color = "black"),
+    axis.title.x = element_text(margin = margin(t = 10)),
     legend.title = element_blank(),
-    legend.position = "bottom"
+    legend.position = "bottom",
+    plot.margin = margin(15, 15, 15, 15)
   )
+
+# 4. Save file for Overleaf using explicit Times New Roman settings
+if(!dir.exists("output")) dir.create("output")
+ggsave("output/treatment_effect_stability.png", plot = p_stability, 
+       width = 7.5, height = 4.8, units = "in", dpi = 300)
+
+# 5. Print out dynamically in your Rmd report viewer
+print(p_stability)
 ```
