@@ -47,7 +47,7 @@ eu_countries <- c(
 
 y_var <- "greenwashing_esg" #dependent variable, done like this so I can check alternative versions of greenwashing very quickly.
 
-df_panel <- read_csv("data/CSRD_thesis_data/panel_final_adjusted.csv") #import the data panel that was gathered from Refintiv Eikon (LSEG)
+df_panel <- read_csv("panel_data_lseg.csv") #import the data panel that was gathered from Refintiv Eikon (LSEG)
 ```
 
 
@@ -750,9 +750,9 @@ ggplot(
   #add the titles and labels
   labs(
     title = "ESG Disclosure and Performance Trends over Time",
-    subtitle = "Median standardized scores by treatment status",
+    subtitle = "Median standardised scores by treatment status",
     x = "Year",
-    y = "Median Standardized Score",
+    y = "Median Standardised Score",
     color = NULL,
     linetype = NULL
   ) +
@@ -1084,7 +1084,7 @@ no_cluster_model <- feols(
 
 summary(no_cluster_model)
 
-#year-standardized greenwashing index
+#year-standardised greenwashing index
 y_cluster_model <- feols(
   as.formula(paste0(
     "greenwashing_esg_y ~ treatment_exposed * post_announcement +",
@@ -1113,11 +1113,11 @@ summary(i_cluster_model)
 
 ### Sensitivity to outlier handling
 
-```{r winsorization }
+```{r winsorisation }
 #managing of extreme outliers, take the bottom and top 5% and set to the 5th percentile value, and 95th percentile respectively 
 
 #function to winsorise
-winsorize_5_95 <- function(x) {
+winsorise_5_95 <- function(x) {
   p5 <- quantile(x, 0.05, na.rm = TRUE)
   p95 <- quantile(x, 0.95, na.rm = TRUE)
   pmax(pmin(x, p95), p5)
@@ -1125,7 +1125,7 @@ winsorize_5_95 <- function(x) {
 
 df_analysis <- df_analysis %>%
   mutate(
-    !!paste0(y_var, "_wins") := winsorize_5_95(.data[[y_var]]) #winsorised for y_var
+    !!paste0(y_var, "_wins") := winsorise_5_95(.data[[y_var]]) #winsorised for y_var
   )
 
 robustness_model_wins <- feols(
@@ -1236,7 +1236,7 @@ robustness_list <- list(
   "Raw GW" = no_cluster_model,
   "Year clustered GW" = y_cluster_model,
   "Industry clustered GW" = i_cluster_model,
-  "Winsorized" = robustness_model_wins,
+  "Winsorised" = robustness_model_wins,
   "Propensity score matching" = fe_model_psm,
   "Coarsed exact matching" = fe_model_cem,
   "MDM matching" = fe_model_mdm
@@ -1297,8 +1297,8 @@ df_plot_data <- map_dfr(master_plot_list, extract_fixest, .id = "specification")
     specification = case_when(
       specification == "Sophisticated model" ~ "Main Model (Firm & Year FE)",
       specification == "Raw GW"               ~ "Alternative DV: Raw GW Index",
-      specification == "Year clustered GW"    ~ "Alternative DV: Year Standardized",
-      specification == "Industry clustered GW"~ "Alternative DV: Industry Standardized",
+      specification == "Year clustered GW"    ~ "Alternative DV: Year Standardised",
+      specification == "Industry clustered GW"~ "Alternative DV: Industry Standardised",
       TRUE ~ specification
     )
   )
